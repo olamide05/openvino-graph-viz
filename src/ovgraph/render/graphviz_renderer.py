@@ -38,14 +38,15 @@ def _cells(prefix: str, ports: list[int], total: int) -> str:
     return "<TR>" + "".join(out) + "</TR>"
 
 
-def node_label(node: Node, in_ports: list[int], out_ports: list[int]) -> str:
+def node_label(node: Node, in_ports: list[int], out_ports: list[int],
+               show_attributes: bool = False) -> str:
     total = max(len(in_ports), len(out_ports), 1)
     rows = []
     if in_ports:
         rows.append(_cells("in", in_ports, total))
     title = f"<B>{escape(node.name)}</B><BR/>{escape(node.op_type)} (id {node.id})"
     rows.append(f'<TR><TD COLSPAN="{total}">{title}</TD></TR>')
-    for k, v in node.attributes.items():
+    for k, v in (node.attributes.items() if show_attributes else ()):
         rows.append(f'<TR><TD COLSPAN="{total}" ALIGN="LEFT">{escape(k)}={escape(v)}</TD></TR>')
     for _port, text in node.meta.get("extra_rows", []):
         rows.append(f'<TR><TD COLSPAN="{total}" ALIGN="LEFT">{escape(text)}</TD></TR>')
@@ -54,7 +55,8 @@ def node_label(node: Node, in_ports: list[int], out_ports: list[int]) -> str:
     return '<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="3">' + "".join(rows) + "</TABLE>>"
 
 
-def build_digraph(graph: Graph, edge_labels: bool = True) -> graphviz.Digraph:
+def build_digraph(graph: Graph, edge_labels: bool = True,
+                  show_attributes: bool = False) -> graphviz.Digraph:
     dot = graphviz.Digraph(format="svg", engine="dot")
     dot.attr(rankdir="TB", ranksep="0.3", nodesep="0.25")
     dot.attr("node", shape="box", style="filled", fontname="Tahoma", fontsize="10", margin="0")
@@ -69,7 +71,7 @@ def build_digraph(graph: Graph, edge_labels: bool = True) -> graphviz.Digraph:
     for n in graph.nodes.values():
         color = n.meta.get("border_color", "black")
         pen = "3" if "border_color" in n.meta else "1"
-        dot.node(str(n.id), label=node_label(n, sorted(ins[n.id]), sorted(outs[n.id])),
+        dot.node(str(n.id), label=node_label(n, sorted(ins[n.id]), sorted(outs[n.id]), show_attributes),
                  fillcolor=_fill(n.op_type), color=color, penwidth=pen)
 
     for e in graph.edges:
@@ -81,14 +83,15 @@ def build_digraph(graph: Graph, edge_labels: bool = True) -> graphviz.Digraph:
 
 
 class GraphvizRenderer:
-    def __init__(self, edge_labels: bool = True) -> None:
+    def __init__(self, edge_labels: bool = True, show_attributes: bool = False) -> None:
         self.edge_labels = edge_labels
+        self.show_attributes = show_attributes
 
     def to_dot(self, graph: Graph) -> str:
-        return build_digraph(graph, self.edge_labels).source
+        return build_digraph(graph, self.edge_labels, self.show_attributes).source
 
     def render_svg(self, graph: Graph, path: str | Path | None = None) -> bytes:
-        svg = build_digraph(graph, self.edge_labels).pipe(format="svg")
+        svg = build_digraph(graph, self.edge_labels, self.show_attributes).pipe(format="svg")
         if path is not None:
             Path(path).write_bytes(svg)
         return svg
