@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"run another registered pass by name ({', '.join(available_passes())})")
     p.add_argument("--attrs", action="store_true", help="show node attributes")
     p.add_argument("--no-edge-labels", action="store_true", help="omit dtype/shape on edges (faster, smaller)")
+    p.add_argument("--fast", action=argparse.BooleanOptionalAction, default=None,
+                   help="fast layout (straight edges). Default: automatic for big graphs")
     p.add_argument("--timing", action="store_true", help="print load/transform/render timings")
     return p
 
@@ -48,7 +50,7 @@ def run(args: argparse.Namespace) -> dict[str, float]:
     out = build_pipeline(args).run(graph)
     t2 = time.perf_counter()
     path = Path(args.output) if args.output else Path(args.model).with_suffix(".svg")
-    GraphvizRenderer(edge_labels=not args.no_edge_labels, show_attributes=args.attrs).render_svg(out, path)
+    GraphvizRenderer(edge_labels=not args.no_edge_labels, show_attributes=args.attrs, fast=args.fast).render_svg(out, path)
     t3 = time.perf_counter()
     return {"nodes_in": len(graph), "nodes_out": len(out), "edges_out": len(out.edges),
             "load_s": t1 - t0, "transform_s": t2 - t1, "render_s": t3 - t2, "output": str(path)}

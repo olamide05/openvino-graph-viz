@@ -53,3 +53,26 @@ def test_svg_output(small_graph, tmp_path):
     svg = GraphvizRenderer().render_svg(small_graph, out)
     assert svg.lstrip().startswith(b"<?xml") and b"<svg" in svg
     assert out.exists()
+
+
+def _chain(n):
+    g = Graph()
+    for i in range(n):
+        g.add_node(Node(i, f"n{i}", "Add"))
+    for i in range(n - 1):
+        g.add_edge(Edge(i, 0, i + 1, 0))
+    return g
+
+
+def test_small_graph_keeps_default_layout():
+    assert "splines" not in GraphvizRenderer().to_dot(_chain(10))
+
+
+def test_big_graph_switches_to_fast_layout_automatically():
+    src = GraphvizRenderer().to_dot(_chain(500))
+    assert "splines=line" in src and "nslimit=1" in src
+
+
+def test_fast_flag_overrides_size():
+    assert "splines=line" in GraphvizRenderer(fast=True).to_dot(_chain(5))
+    assert "splines" not in GraphvizRenderer(fast=False).to_dot(_chain(500))

@@ -13,6 +13,13 @@ import graphviz
 
 from ..graph import Edge, Graph, Node, format_shape
 
+# Above this many nodes we switch to "fast" layout settings (see build_digraph).
+FAST_NODE_THRESHOLD = 400
+# Measured on TinyLlama-1.1B (3,168 nodes): curved-edge routing is what makes dot
+# take minutes. Straight edges plus a capped layout search brought it to ~1 minute.
+FAST_GRAPH_ATTRS = {"splines": "line", "nslimit": "1", "nslimit1": "1",
+                    "mclimit": "0.1", "remincross": "false"}
+
 DEFAULT_FILL = "#f2f2f2"
 _PALETTE = ["#cfe8fc", "#d5f5d5", "#fde6c8", "#e9d9f7", "#fbd5d5",
             "#d8f0ee", "#f7f0c0", "#e0e0f0", "#f0dcc8", "#d9ead3"]
@@ -56,9 +63,14 @@ def node_label(node: Node, in_ports: list[int], out_ports: list[int],
 
 
 def build_digraph(graph: Graph, edge_labels: bool = True,
-                  show_attributes: bool = False) -> graphviz.Digraph:
+                  show_attributes: bool = False, fast: bool | None = None) -> graphviz.Digraph:
+    """fast=None means automatic: big graphs get the quick layout settings."""
+    if fast is None:
+        fast = len(graph) > FAST_NODE_THRESHOLD
     dot = graphviz.Digraph(format="svg", engine="dot")
     dot.attr(rankdir="TB", ranksep="0.3", nodesep="0.25")
+    if fast:
+        dot.attr(**FAST_GRAPH_ATTRS)
     dot.attr("node", shape="box", style="filled", fontname="Tahoma", fontsize="10", margin="0")
     dot.attr("edge", fontname="Tahoma", fontsize="8")
 
@@ -83,15 +95,17 @@ def build_digraph(graph: Graph, edge_labels: bool = True,
 
 
 class GraphvizRenderer:
-    def __init__(self, edge_labels: bool = True, show_attributes: bool = False) -> None:
+    def __init__(self, edge_labels: bool = True, show_attributes: bool = False,
+                 fast: bool | None = None) -> None:
         self.edge_labels = edge_labels
         self.show_attributes = show_attributes
+        self.fast = fast
 
     def to_dot(self, graph: Graph) -> str:
-        return build_digraph(graph, self.edge_labels, self.show_attributes).source
+        return build_digraph(graph, self.edge_labels, self.show_attributes, self.fast).source
 
     def render_svg(self, graph: Graph, path: str | Path | None = None) -> bytes:
-        svg = build_digraph(graph, self.edge_labels, self.show_attributes).pipe(format="svg")
+        svg = build_digraph(graph, self.edge_labels, self.show_attributes, self.fast).pipe(format="svg")
         if path is not None:
             Path(path).write_bytes(svg)
         return svg
