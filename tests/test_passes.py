@@ -60,3 +60,26 @@ def test_rows_sorted_by_port():
 def test_registry():
     assert {"highlight", "hide_constants"} <= set(available_passes())
     assert get_pass("highlight") is HighlightPass
+
+
+def test_fold_constant_converts_rewires_and_keeps_activation_converts():
+    from ovgraph import Edge, Graph, Node
+    from ovgraph.passes.fold_constant_converts import FoldConstantConvertsPass
+    from ovgraph.passes.hide_constants import HideConstantsPass
+
+    g = Graph()
+    for i, op in enumerate(["Parameter", "Constant", "Convert", "MatMul", "Convert", "Result"]):
+        g.add_node(Node(i, f"n{i}", op))
+    g.add_edge(Edge(1, 0, 2, 0, (4, 4), "f16"))   # weight const -> Convert
+    g.add_edge(Edge(2, 0, 3, 1, (4, 4), "f32"))   # Convert -> MatMul port 1
+    g.add_edge(Edge(0, 0, 3, 0, (1, 4), "f32"))
+    g.add_edge(Edge(3, 0, 4, 0, (1, 4), "f32"))   # activation -> Convert (must stay)
+    g.add_edge(Edge(4, 0, 5, 0, (1, 4), "f16"))
+
+    out = FoldConstantConvertsPass().run(g.clone())
+    assert 2 not in out.nodes and 4 in out.nodes
+    assert Edge(1, 0, 3, 1, (4, 4), "f32") in out.edges   # constant now feeds MatMul directly, as f32
+    assert len(g) == 6                                      # input untouched
+
+    hidden = HideConstantsPass().run(out)
+    assert hidden.nodes[3].meta["extra_rows"] == [(1, "[1]: f32[4,4]")]

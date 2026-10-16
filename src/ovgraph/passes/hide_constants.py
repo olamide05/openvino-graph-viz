@@ -25,12 +25,19 @@ class HideConstantsPass(Pass):
         const_ids = {i for i, n in graph.nodes.items()
                      if n.op_type == self.constant_type}
 
+        # One pass up front: how many distinct (consumer, port) pairs each constant feeds.
+        # (Calling graph.out_edges() per edge here made the pass O(E^2) on shared constants.)
+        users: dict[int, set[tuple[int, int]]] = {c: set() for c in const_ids}
+        for e in graph.edges:
+            if e.src_id in const_ids:
+                users[e.src_id].add((e.dst_id, e.dst_port))
+
         kept = []
         for e in graph.edges:
             if e.src_id in const_ids:
                 if e.dst_id in const_ids:
                     continue  # constant -> constant: both disappear
-                n_users = len({(x.dst_id, x.dst_port) for x in graph.out_edges(e.src_id)})
+                n_users = len(users[e.src_id])
                 text = f"[{e.dst_port}]: {e.dtype or '?'}{format_shape(e.shape)}"
                 if n_users > 1:
                     text += f" (shared: {e.src_id})"

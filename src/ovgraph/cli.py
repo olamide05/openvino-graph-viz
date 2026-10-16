@@ -32,12 +32,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_pipeline(args: argparse.Namespace) -> Pipeline:
     pipe = Pipeline()
-    if args.hide_constants:
-        pipe.add(HideConstantsPass())
+    # Extra passes run first (e.g. fold_constant_converts must run BEFORE hide_constants).
     for name in args.extra_passes:
         if name in ("hide_constants", "highlight"):
             continue  # have dedicated flags
         pipe.add(get_pass(name)())
+    if args.hide_constants:
+        pipe.add(HideConstantsPass())
     if args.highlight_op or args.highlight_id:
         pipe.add(HighlightPass(node_ids=set(args.highlight_id), op_types=set(args.highlight_op)))
     return pipe

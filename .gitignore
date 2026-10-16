@@ -4,3 +4,6 @@ __pycache__/
 models/
 .pytest_cache/
 .venv312/
+
+*.zip
+.venv312/
