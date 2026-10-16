@@ -55,3 +55,30 @@ def test_cli_unknown_extension_is_a_clean_error(tmp_path):
     f = tmp_path / "m.onnx"
     f.write_text("x")
     assert main([str(f)]) == 1
+
+
+def test_cli_passes_follow_command_line_order_and_options(ir_model, tmp_path):
+    from ovgraph.cli import build_parser, build_pipeline
+    a = build_parser().parse_args([str(ir_model), "--highlight-name", "mm", "--hide-constants"])
+    b = build_parser().parse_args([str(ir_model), "--hide-constants", "--pass", "highlight:names=mm;color=blue"])
+    assert [p.name for p in build_pipeline(a).passes] == ["highlight", "hide_constants"]
+    assert [p.name for p in build_pipeline(b).passes] == ["hide_constants", "highlight"]
+    assert build_pipeline(b).passes[1].color == "blue"
+    out = tmp_path / "o.svg"
+    assert main([str(ir_model), "-o", str(out), "--hide-constants", "--highlight-name", "mm"]) == 0
+    assert 'stroke="red"' in out.read_text(encoding="utf-8")
+
+
+def test_cli_bad_pass_arguments_are_clean_errors(ir_model, tmp_path):
+    import pytest
+    assert main([str(ir_model), "--pass", "no-such-pass"]) == 1
+    assert main([str(ir_model), "--pass", "highlight:bogus=1"]) == 1
+    assert main([str(ir_model), "--highlight-id", "abc"]) == 1
+    with pytest.raises(SystemExit):                      # malformed spec: argparse usage error
+        main([str(ir_model), "--pass", "highlight:novalue"])
+
+
+def test_corrupt_model_file_is_a_clean_error(tmp_path):
+    bad = tmp_path / "broken.xml"
+    bad.write_text("<this is not an openvino model>")
+    assert main([str(bad)]) == 1

@@ -18,7 +18,7 @@ Requirements: Python 3.10+, and the [Graphviz](https://graphviz.org/download/) `
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # cmd.exe: .venv\Scripts\activate.bat   Linux/macOS: source .venv/bin/activate
 pip install -e ".[openvino,dev]"
-python -m pytest -q                 # 32 tests
+python -m pytest -q                 # 41 tests
 ```
 
 Try it on the bundled example models:
@@ -30,20 +30,42 @@ python -m ovgraph examples\models\mini_transformer.xml -o out.svg --hide-constan
 ## 2. Usage
 
 ```
-ovgraph MODEL.xml [-o OUT.svg] [--hide-constants] [--highlight-op OP]... [--highlight-id ID]...
-                  [--pass NAME]... [--attrs] [--no-edge-labels] [--fast | --no-fast] [--timing]
+ovgraph MODEL.xml [-o OUT.svg] [pass flags in the order you want them applied] [--attrs]
+                  [--no-edge-labels] [--fast | --no-fast] [--timing]
 ```
+
+With no pass flags the model is drawn as it is (no transformations).
+
+**Passes run in the order their flags appear on the command line.** The order can matter
+(see `fold_constant_converts` below), so this is deliberate.
 
 | Flag | What it does |
 |---|---|
 | `--hide-constants` | Remove Constant nodes. Each consumer gets a row per constant input: `[1]: f32[768,768]`. If a constant feeds several consumers the row ends with `(shared: <node id>)`. Only dtype and shape are shown, never values. |
+| `--highlight-name NAME` | Red border on every node with this name (repeatable; names need not be unique, all matches light up). |
 | `--highlight-op OP` | Red border on every node of op type `OP` (repeatable, e.g. `MatMul`). |
-| `--highlight-id ID` | Red border on the node with this id (the number shown in each box, e.g. `MatMul (id 7)`). |
-| `--pass NAME` | Run another registered pass, e.g. `fold_constant_converts`. These run before `--hide-constants`. |
+| `--highlight-id ID` | Red border on the node with this id (the number in each box, e.g. `MatMul (id 7)`). |
+| `--pass SPEC` | Run any registered pass: `NAME` or `NAME:key=value;key=value` (repeatable). Values can be comma lists. Example: `--pass "highlight:names=q,k;color=blue"`. Names may use `-` or `_`. |
 | `--attrs` | Show node attributes (hidden by default, they are long). |
 | `--no-edge-labels` | Leave dtype/shape off the edges (smaller and faster). |
 | `--fast` / `--no-fast` | Force the fast layout on or off. Default: automatic above 400 drawn nodes. |
-| `--timing` | Print load / transform / render time to stderr. |
+| `--timing` | Print graph size (nodes and edges), load / transform / render time and the environment (stderr). |
+
+Pass options: `hide_constants` takes `type` (the op type to hide, default `Constant`);
+`highlight` takes `names`, `ids`, `ops`, `color`; `fold_constant_converts` takes none.
+Bad input (missing file, corrupt model, unknown pass or option, non-numeric id) gives a one-line
+`error: ...` and exit code 1; a malformed `--pass` spec is an argparse usage error (exit code 2).
+
+Examples:
+
+```powershell
+# no transformations
+python -m ovgraph examples\models\mini_transformer.xml -o full.svg
+# hide constants, then highlight two nodes by name
+python -m ovgraph examples\models\mini_transformer.xml -o out.svg --hide-constants --highlight-name q --highlight-name k
+# same, written with --pass specs
+python -m ovgraph examples\models\mini_transformer.xml -o out.svg --pass hide-constants --pass "highlight:names=q,k"
+```
 
 Each box shows the node name, `OpType (id N)`, input ports on top, output ports at the bottom, and any
 rows added by passes. Edges carry `dtype[shape]`; a `?` is a dynamic dimension.
@@ -56,7 +78,9 @@ from ovgraph.passes import Pipeline, HideConstantsPass, HighlightPass
 from ovgraph.render import GraphvizRenderer
 
 g = load_graph("model.xml")
-g2 = Pipeline([HideConstantsPass(), HighlightPass(op_types={"MatMul"})]).run(g)   # g is untouched
+pipe = Pipeline([HideConstantsPass(), HighlightPass(names=["q", "k"])])   # applied in this order
+g2 = pipe.run(g)                                                           # g is untouched
+pipe.set_enabled("hide_constants", False)                                  # switch a pass off, keep the rest
 GraphvizRenderer().render_svg(g2, "out.svg")
 ```
 
@@ -102,16 +126,20 @@ class MyPass(Pass):
 Add a model format: subclass `Loader` (`name`, `extensions`, `load(path) -> Graph`) and decorate it with `@register_loader`;
 it is picked by file extension or `--format`. Nothing else changes.
 
+A pass that takes options overrides `from_options(options: dict[str, list[str]])` (see `HighlightPass`); then the
+CLI can configure it with `--pass "name:key=value"` without any CLI change.
+
 ### The custom pass: `fold_constant_converts`
 
 FP16 exports (like TinyLlama) store each weight as `Constant(f16) -> Convert(f32) -> layer`.
 Hiding constants alone leaves one useless Convert box per weight. This pass removes a Convert whose only input is a
 Constant and joins the Constant directly to the Convert's consumers with the Convert's output dtype, so `hide_constants`
 then shows `[1]: f32[2048,2048]`. Converts on real activations are left alone.
+It must run **before** `hide_constants` (once the Constants are hidden there is nothing left to fold), so pass it first on the command line.
 
 ```powershell
 python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_before.svg --hide-constants
-python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_after.svg  --hide-constants --pass fold_constant_converts
+python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_after.svg  --pass fold_constant_converts --hide-constants
 ```
 
 On TinyLlama this takes the drawn graph from **1911 to 1528 nodes**. Small demo:
@@ -125,26 +153,44 @@ Three models, with generated SVGs:
 |---|---|---|
 | `mini_cnn` | `python examples/make_models.py` | `examples/svg/mini_cnn_full.svg`, `mini_cnn_hidden.svg` |
 | `mini_transformer` (dynamic sequence length, one shared weight) | same script | `examples/svg/mini_transformer_full.svg`, `mini_transformer_hidden.svg` |
-| TinyLlama-1.1B-Chat (3168 nodes) | `optimum-cli export openvino --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format fp16 models/tinyllama` | `tinyllama_before.svg`, `tinyllama_after.svg` (hidden constants, without / with the custom pass) |
+| TinyLlama-1.1B-Chat (3168 nodes) | `optimum-cli export openvino --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --weight-format fp16 models/tinyllama` | `tinyllama_full.svg` (no passes), `tinyllama_before.svg` (constants hidden), `tinyllama_after.svg` (constants hidden + custom pass) |
 
 Regenerate the small SVGs with `python examples/generate_svgs.py`.
 
 ## 6. Testing
 
 ```powershell
-python -m pytest -q      # 32 tests, about 6 s
+python -m pytest -q      # 41 tests, about 6 s
 ```
 
-* Unit tests: graph invariants, each pass (including that the input graph is untouched), renderer output.
-* End-to-end tests build a small IR with OpenVINO, run the real CLI and check the SVG (needs `dot`; skipped without it).
-* Error paths: missing file and unknown extension give a clean message and exit code 1.
+* Graph: node and edge creation, unique ids with duplicate names allowed, several edges between the same pair of nodes
+  (different ports), edge to an unknown node rejected, clone independence, dynamic and missing shapes.
+* Passes (on small synthetic graphs, independent of parsing and rendering): highlight by name / id / op type, only the
+  matching nodes change, hide_constants with single and shared constants (port kept, `(shared: id)` marker, unrelated edges
+  kept), constants removed only when no visible connection remains, the original graph untouched.
+* Pipeline: passes run in the given order, order changes the result, a disabled pass is skipped, pass options are parsed.
+* Renderer: DOT has ports and edge ports, highlight becomes a red border, names are HTML-escaped, SVG is produced, fast
+  layout switches on automatically for big graphs.
+* Model parsing and end to end: build a small IR with OpenVINO, check op types, port indices, shapes and dynamic dims,
+  run the real CLI with passes and check the SVG (needs `dot`; skipped without it). Pass order on the command line.
+* Error paths: missing file, corrupt model, unknown extension, unknown pass or option give a clean message and exit code 1.
 * The example models and the custom pass are covered too.
 
 ## 7. Performance
 
-Measured on the development laptop (Windows, Python 3.14, Graphviz 16.1).
+**Testing environment:** Windows 11 laptop, 8 logical CPUs, Python 3.14.4, OpenVINO 2026.4.1, Graphviz 16.1.0
+(the line `--timing` prints). Times are single runs.
 
-Synthetic chains (`python examples/benchmark.py`; about 40% constants), hide + highlight passes, fast render:
+**TinyLlama-1.1B-Chat-v1.0** (FP16 export, `--timing`):
+
+| run | loaded | drawn | load | transform | render |
+|---|---|---|---|---|---|
+| no passes (`tinyllama_full.svg`) | 3168 nodes, 3741 edges | 3168 nodes, 3741 edges | 0.47 s | 0.02 s | 17.3 s |
+| `--hide-constants` (`tinyllama_before.svg`) | 3168 nodes, 3741 edges | 1911 nodes, 2429 edges | 0.44 s | 0.02 s | 9.2 s |
+| `--pass fold_constant_converts --hide-constants` (`tinyllama_after.svg`) | 3168 nodes, 3741 edges | 1528 nodes, 2025 edges | 0.43 s | 0.02 s | 8.9 s |
+
+**Synthetic chains** (`python examples/benchmark.py`; about 40% constants), hide + highlight passes, fast render.
+This is where the 5,000-node target is checked:
 
 | nodes | edges | passes | drawn | render |
 |---|---|---|---|---|
@@ -153,9 +199,9 @@ Synthetic chains (`python examples/benchmark.py`; about 40% constants), hide + h
 | 2499 | 3329 | 0.015 s | 1666 | 0.98 s |
 | 5001 | 6665 | 0.031 s | 3334 | 1.55 s |
 
-TinyLlama (3168 nodes, `--hide-constants`): load 0.47 s, transform 0.02 s, render 9.6 s.
-
 * Loading and passes are cheap; **Graphviz layout is the bottleneck**.
+* Memory: a pipeline run makes ONE copy of the graph (nodes are deep-copied because passes edit their `meta`; the frozen
+  edges are shared, only the list is new). Passes then edit that copy in place, so no pass copies the graph again.
 * Curved edge routing was the main cost. Above 400 drawn nodes the renderer switches to a fast layout
   (`splines=line`, reduced `nslimit`/`mclimit`, no `remincross`). Without it, the full TinyLlama graph did not finish in a reasonable time.
 * The benchmark caught an O(E^2) loop in `hide_constants` (it looked up each shared constant's consumers once per edge).

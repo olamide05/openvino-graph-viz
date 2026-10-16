@@ -15,11 +15,22 @@ class HideConstantsPass(Pass):
     If the same constant feeds several consumers each row also carries
         (shared: <constant node id>)
     Only dtype and shape are shown, never tensor values.
+
+    A Constant node is removed only when no visible connection remains on it. (A
+    constant that feeds another constant keeps that edge, so both stay.)
     """
     name = "hide_constants"
 
     def __init__(self, constant_type: str = CONSTANT) -> None:
         self.constant_type = constant_type
+
+    @classmethod
+    def from_options(cls, options: dict[str, list[str]]) -> "HideConstantsPass":
+        """Option: type=Constant (the op type to hide)."""
+        unknown = set(options) - {"type"}
+        if unknown:
+            raise ValueError(f"hide_constants: unknown option(s) {', '.join(sorted(unknown))}; use type")
+        return cls(options["type"][-1]) if "type" in options else cls()
 
     def run(self, graph: Graph) -> Graph:
         const_ids = {i for i, n in graph.nodes.items()
@@ -36,17 +47,20 @@ class HideConstantsPass(Pass):
         for e in graph.edges:
             if e.src_id in const_ids:
                 if e.dst_id in const_ids:
-                    continue  # constant -> constant: both disappear
+                    kept.append(e)  # constant -> constant: a visible connection, so keep it
+                    continue
                 n_users = len(users[e.src_id])
                 text = f"[{e.dst_port}]: {e.dtype or '?'}{format_shape(e.shape)}"
                 if n_users > 1:
                     text += f" (shared: {e.src_id})"
                 graph.nodes[e.dst_id].meta.setdefault("extra_rows", []).append(
                     (e.dst_port, text))
-            elif e.dst_id not in const_ids:
+            else:
                 kept.append(e)
 
-        for cid in const_ids:
+        # Remove a Constant only if no kept edge still touches it.
+        connected = {i for e in kept for i in (e.src_id, e.dst_id)}
+        for cid in const_ids - connected:
             del graph.nodes[cid]
         graph.edges = kept
 

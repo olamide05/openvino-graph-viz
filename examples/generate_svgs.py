@@ -31,5 +31,5 @@ import make_models  # noqa: E402
 fp16 = str(MODELS / "mini_transformer_fp16.xml")
 ov.save_model(make_models.mini_transformer(), fp16, compress_to_fp16=True)
 main([fp16, "-o", str(OUT / "fp16_before.svg"), "--hide-constants"])
-main([fp16, "-o", str(OUT / "fp16_after.svg"), "--hide-constants", "--pass", "fold_constant_converts",
-      "--highlight-op", "MatMul"])
+main([fp16, "-o", str(OUT / "fp16_after.svg"), "--pass", "fold_constant_converts", "--hide-constants",
+      "--highlight-name", "q", "--highlight-op", "MatMul"])
