@@ -16,7 +16,7 @@ Requirements: Python 3.10+, and the [Graphviz](https://graphviz.org/download/) `
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1          # Linux/macOS: source .venv/bin/activate
+.venv\Scripts\Activate.ps1          # cmd.exe: .venv\Scripts\activate.bat   Linux/macOS: source .venv/bin/activate
 pip install -e ".[openvino,dev]"
 python -m pytest -q                 # 32 tests
 ```
