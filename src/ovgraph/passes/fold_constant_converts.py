@@ -1,3 +1,5 @@
+"""Custom pass that folds Constant -> Convert chains (FP16 weights) so hide_constants can show them as rows.
+"""
 from __future__ import annotations
 
 from ..graph import Edge, Graph
@@ -21,6 +23,7 @@ class FoldConstantConvertsPass(Pass):
     name = "fold_constant_converts"
 
     def run(self, graph: Graph) -> Graph:
+        """Remove Convert nodes fed only by a Constant and join the Constant to the Convert's consumers."""
         node_type = {i: n.op_type for i, n in graph.nodes.items()}
         # Convert id -> its single incoming edge (only if that edge comes from a Constant)
         feeders: dict[int, Edge] = {}

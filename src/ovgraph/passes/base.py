@@ -1,3 +1,5 @@
+"""Pass base class, Pipeline, and the registry that lets the CLI pick passes by name.
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -16,7 +18,8 @@ class Pass(ABC):
     enabled: bool = True
 
     @abstractmethod
-    def run(self, graph: Graph) -> Graph: ...
+    def run(self, graph: Graph) -> Graph:
+        """Transform `graph` and return it. The returned graph is what the next pass receives."""
 
     @classmethod
     def from_options(cls, options: dict[str, list[str]]) -> "Pass":
@@ -45,6 +48,7 @@ class Pipeline:
         self.passes: list[Pass] = list(passes or [])
 
     def add(self, p: Pass) -> "Pipeline":
+        """Append a pass and return self, so calls can be chained."""
         self.passes.append(p)
         return self
 
@@ -56,6 +60,7 @@ class Pipeline:
         return self
 
     def run(self, graph: Graph) -> Graph:
+        """Return a transformed copy; `graph` itself is never modified. Disabled passes are skipped."""
         g = graph.clone()
         for p in self.passes:
             if p.enabled:
@@ -69,6 +74,7 @@ _REGISTRY: dict[str, type[Pass]] = {}
 
 
 def register_pass(cls: type[Pass]) -> type[Pass]:
+    """Class decorator: make the pass available by its `name` (for example `--pass NAME`)."""
     _REGISTRY[cls.name] = cls
     return cls
 
@@ -82,4 +88,5 @@ def get_pass(name: str) -> type[Pass]:
 
 
 def available_passes() -> list[str]:
+    """Sorted names of all registered passes."""
     return sorted(_REGISTRY)

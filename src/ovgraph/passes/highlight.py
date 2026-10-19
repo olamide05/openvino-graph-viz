@@ -1,3 +1,5 @@
+"""Pass that gives selected nodes a coloured border.
+"""
 from __future__ import annotations
 
 from typing import Callable
@@ -49,6 +51,7 @@ class HighlightPass(Pass):
                    op_types=set(options.get("ops", [])), color=color)
 
     def run(self, graph: Graph) -> Graph:
+        """Write `meta["border_color"]` on every matching node; the renderer draws it."""
         for n in graph.nodes.values():
             if self._match(n):
                 n.meta["border_color"] = self.color

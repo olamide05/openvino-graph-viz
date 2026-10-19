@@ -47,6 +47,7 @@ def _cells(prefix: str, ports: list[int], total: int) -> str:
 
 def node_label(node: Node, in_ports: list[int], out_ports: list[int],
                show_attributes: bool = False, show_names: bool = True) -> str:
+    """HTML-like table label: input port cells, title, optional attributes, pass-added rows, output port cells."""
     # show_names=False leaves the (long) node name out; the box shows "OpType (id N)" and the
     # name can be looked up by id in the node map JSON. A Group box (from collapse_modules) always
     # shows its name: that is the module name ("layers.7"), not a node name, and the box means
@@ -103,6 +104,8 @@ def build_digraph(graph: Graph, edge_labels: bool = True,
 
 
 class GraphvizRenderer:
+    """Draws a Graph with Graphviz `dot`. Requires the `dot` program to be installed."""
+
     def __init__(self, edge_labels: bool = True, show_attributes: bool = False,
                  fast: bool | None = None, show_names: bool = True) -> None:
         self.edge_labels = edge_labels
@@ -111,9 +114,11 @@ class GraphvizRenderer:
         self.show_names = show_names
 
     def to_dot(self, graph: Graph) -> str:
+        """The DOT source text (no Graphviz run needed)."""
         return build_digraph(graph, self.edge_labels, self.show_attributes, self.fast, self.show_names).source
 
     def render_svg(self, graph: Graph, path: str | Path | None = None) -> bytes:
+        """Run Graphviz and return the SVG bytes; also write them to `path` when one is given."""
         svg = build_digraph(graph, self.edge_labels, self.show_attributes, self.fast, self.show_names).pipe(format="svg")
         if path is not None:
             Path(path).write_bytes(svg)

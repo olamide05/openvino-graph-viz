@@ -1,3 +1,5 @@
+"""Loaders turn a model file into a Graph. Only the OpenVINO loader exists; new formats register themselves.
+"""
 from .base import Loader, available_loaders, load_graph, register_loader
 
 # Importing the module registers it. It does NOT import openvino yet (that

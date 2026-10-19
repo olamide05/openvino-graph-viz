@@ -1,3 +1,5 @@
+"""Pass that hides Constant nodes by turning them into rows on the nodes that use them.
+"""
 from __future__ import annotations
 
 from ..graph import Graph, format_shape
@@ -33,6 +35,7 @@ class HideConstantsPass(Pass):
         return cls(last_value("hide_constants", options, "type")) if "type" in options else cls()
 
     def run(self, graph: Graph) -> Graph:
+        """Replace each constant input with a row on its consumer and remove constants left with no connection."""
         const_ids = {i for i, n in graph.nodes.items()
                      if n.op_type == self.constant_type}
 

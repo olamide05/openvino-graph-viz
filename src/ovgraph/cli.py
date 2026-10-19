@@ -1,3 +1,7 @@
+"""Command-line interface: `python -m ovgraph MODEL.xml [pass flags] -o out.svg`.
+
+Pass flags are applied in the order they appear on the command line.
+"""
 from __future__ import annotations
 
 import argparse
@@ -40,6 +44,8 @@ def _step(pass_name: str | None, key: str | None = None, flag: bool = False):
     runs hide first and `--highlight-op MatMul --hide-constants` runs highlight first.
     """
     class Step(argparse.Action):
+        """Appends (pass name, options) to args.steps each time its flag appears."""
+
         def __init__(self, option_strings, dest, **kw):
             super().__init__(option_strings, dest, nargs=0 if flag else None, **kw)
 
@@ -57,6 +63,7 @@ def _step(pass_name: str | None, key: str | None = None, flag: bool = False):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """The argparse parser with every flag. Pass flags all write into one ordered list, args.steps."""
     p = argparse.ArgumentParser(
         prog="ovgraph", description="Render a model graph as SVG.",
         epilog="Passes run in the order their flags appear on the command line.")
@@ -117,6 +124,7 @@ def environment_summary() -> str:
 
 
 def run(args: argparse.Namespace) -> dict[str, float]:
+    """Load, transform and render once. Returns node/edge counts, stage timings and the output path."""
     pipeline = build_pipeline(args)  # first, so a bad pass option is reported before the (slow) model load
     t0 = time.perf_counter()
     graph = load_graph(args.model, args.format)
@@ -135,6 +143,7 @@ def run(args: argparse.Namespace) -> dict[str, float]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Entry point. Returns 0 on success; a missing file, bad model or bad pass prints `error: ...` and returns 1."""
     args = build_parser().parse_args(argv)
     try:
         info = run(args)

@@ -1,3 +1,5 @@
+"""Loader for OpenVINO IR models (.xml + .bin). The only module that imports OpenVINO.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,10 +34,13 @@ def _attributes(op) -> dict[str, str]:
 
 @register_loader
 class OpenVINOLoader(Loader):
+    """Reads an OpenVINO IR model and builds a Graph: one Node per op, one Edge per op input."""
+
     name = "openvino"
     extensions = (".xml",)  # OpenVINO IR = .xml (graph) + .bin (weights)
 
     def load(self, path: Path) -> Graph:
+        """Missing file raises FileNotFoundError; an unreadable model raises ValueError."""
         import openvino as ov  # lazy: only needed when this loader is actually used
 
         path = Path(path)

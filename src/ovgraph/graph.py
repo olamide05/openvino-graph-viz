@@ -21,6 +21,7 @@ def format_shape(shape: Shape | None) -> str:
 
 @dataclass
 class Node:
+    """One operation in the model: our own unique id, its name and op type, short attributes, and `meta` hints."""
     # Unique ID, separate from `name` because model names can repeat.
     id: int
     name: str
@@ -50,17 +51,21 @@ class Edge:
 
 
 class Graph:
+    """Nodes in a dict keyed by id, edges in a list (two nodes can be joined by several edges)."""
+
     def __init__(self) -> None:
         self.nodes: dict[int, Node] = {}
         self.edges: list[Edge] = []
 
     def add_node(self, node: Node) -> Node:
+        """Add a node. A duplicate id raises ValueError."""
         if node.id in self.nodes:
             raise ValueError(f"duplicate node id {node.id}")
         self.nodes[node.id] = node
         return node
 
     def add_edge(self, edge: Edge) -> Edge:
+        """Add an edge. An edge to or from an unknown node id raises KeyError."""
         for nid in (edge.src_id, edge.dst_id):
             if nid not in self.nodes:
                 raise KeyError(f"edge refers to unknown node id {nid}")
@@ -68,9 +73,11 @@ class Graph:
         return edge
 
     def out_edges(self, node_id: int) -> list[Edge]:
+        """Edges that leave this node. Scans every edge, so O(E)."""
         return [e for e in self.edges if e.src_id == node_id]
 
     def in_edges(self, node_id: int) -> list[Edge]:
+        """Edges that enter this node. Scans every edge, so O(E)."""
         return [e for e in self.edges if e.dst_id == node_id]
 
     def clone(self) -> Graph:

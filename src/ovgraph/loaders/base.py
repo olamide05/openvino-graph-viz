@@ -1,3 +1,5 @@
+"""Loader base class and the registry that picks a loader by name or file extension.
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -12,18 +14,21 @@ class Loader(ABC):
     extensions: tuple[str, ...] = ()
 
     @abstractmethod
-    def load(self, path: Path) -> Graph: ...
+    def load(self, path: Path) -> Graph:
+        """Read the file at `path` and return it as a Graph."""
 
 
 _LOADERS: dict[str, Loader] = {}
 
 
 def register_loader(cls: type[Loader]) -> type[Loader]:
+    """Class decorator: make the loader available by its `name` and file extensions."""
     _LOADERS[cls.name] = cls()
     return cls
 
 
 def available_loaders() -> list[str]:
+    """Sorted names of all registered loaders."""
     return sorted(_LOADERS)
 
 
