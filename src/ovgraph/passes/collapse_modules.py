@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 
 from ..graph import Edge, Graph, Node
 from .base import Pass, register_pass
 
 GROUP = "Group"
+# OpenVINO's generated names look like Gather_70871 (op type, underscore, number). Such a name says
+# nothing about which module the node belongs to, unlike __module.model.layers.7.self_attn/...
+AUTO_NAME = re.compile(r"^[A-Za-z0-9]+_\d+$")
 
 
 @register_pass
@@ -20,6 +23,11 @@ class CollapseModulesPass(Pass):
         __module.model.layers.7.self_attn/aten::unsqueeze/Unsqueeze   ->  "layers.7"
     so a 22-layer model becomes 22 boxes. Nodes whose name does not match stay as they are.
 
+    - Nodes with a generated name (Gather_70871, ReadValue_71348: the KV-cache plumbing in TinyLlama) say
+      nothing about their module, so they are placed by their connections (option `absorb`, on by default):
+      a node joins a module when ALL its consumers are in that module, else when ALL its producers are.
+      This repeats until nothing changes, so a whole chain ReadValue -> Gather -> layer joins that layer.
+      Nodes that DO have a module name (embeddings, final norm) are never moved this way.
     - Edges inside a module disappear; edges between boxes are merged into one edge
       labelled with how many edges it stands for ("17 edges").
     - `expand` lists modules to leave unfolded, to look inside one layer:
@@ -30,7 +38,9 @@ class CollapseModulesPass(Pass):
     """
     name = "collapse_modules"
 
-    def __init__(self, pattern: str = r"(layers\.\d+)", expand: list[str] | set[str] | None = None) -> None:
+    def __init__(self, pattern: str = r"(layers\.\d+)", expand: list[str] | set[str] | None = None,
+                 absorb: bool = True) -> None:
+        self.absorb = absorb
         self.regex = re.compile(pattern)
         if self.regex.groups < 1:
             raise ValueError("collapse_modules: pattern needs one capture group, e.g. (layers\\.\\d+)")
@@ -38,11 +48,17 @@ class CollapseModulesPass(Pass):
 
     @classmethod
     def from_options(cls, options: dict[str, list[str]]) -> "CollapseModulesPass":
-        """Options: pattern=<regex with one group>  expand=layers.0,layers.1"""
-        unknown = set(options) - {"pattern", "expand"}
+        """Options: pattern=<regex with one group>  expand=layers.0,layers.1  absorb=true|false"""
+        unknown = set(options) - {"pattern", "expand", "absorb"}
         if unknown:
-            raise ValueError(f"collapse_modules: unknown option(s) {', '.join(sorted(unknown))}; use pattern, expand")
+            raise ValueError(f"collapse_modules: unknown option(s) {', '.join(sorted(unknown))}; "
+                             "use pattern, expand, absorb")
         kwargs = {}
+        if "absorb" in options:
+            word = options["absorb"][-1].lower()
+            if word not in ("true", "false"):
+                raise ValueError("collapse_modules: absorb must be true or false")
+            kwargs["absorb"] = word == "true"
         if "pattern" in options:
             kwargs["pattern"] = ",".join(options["pattern"])  # a regex may contain commas, which the option parser split
         if "expand" in options:
@@ -56,11 +72,40 @@ class CollapseModulesPass(Pass):
         m = self.regex.search(node.name)
         return m.group(1) if m else None
 
+    def _absorb(self, graph: Graph, module_of: dict[int, str]) -> None:
+        """Give generated-name nodes a module from their neighbours (see the class docstring). Edits module_of."""
+        consumers: dict[int, set[int]] = defaultdict(set)
+        producers: dict[int, set[int]] = defaultdict(set)
+        for e in graph.edges:
+            consumers[e.src_id].add(e.dst_id)
+            producers[e.dst_id].add(e.src_id)
+        loose = {i for i, n in graph.nodes.items() if i not in module_of and AUTO_NAME.match(n.name)}
+        while True:
+            joined: dict[int, str] = {}  # decided from the state at the start of the round, so order never matters
+            for i in loose:
+                for neighbours in (consumers[i], producers[i]):
+                    modules = {module_of.get(x) for x in neighbours}
+                    if len(modules) == 1 and None not in modules:  # every neighbour is in the same module
+                        joined[i] = modules.pop()
+                        break
+            if not joined:
+                return
+            module_of.update(joined)
+            loose -= joined.keys()
+
     def run(self, graph: Graph) -> Graph:
         """Add one Group node per module, rewire the edges to it, then remove the folded nodes."""
-        members: dict[str, list[Node]] = {}  # module -> its nodes, in order of first appearance
+        module_of: dict[int, str] = {}  # node id -> its module, from the name
         for n in graph.nodes.values():
             module = self._module_of(n)
+            if module is not None:
+                module_of[n.id] = module
+        if self.absorb:
+            self._absorb(graph, module_of)
+
+        members: dict[str, list[Node]] = {}  # module -> its nodes, in order of first appearance
+        for n in graph.nodes.values():
+            module = module_of.get(n.id)
             if module is not None and module not in self.expand:
                 members.setdefault(module, []).append(n)
 

@@ -268,3 +268,69 @@ def test_every_original_edge_is_recoverable_after_both_passes():
             found += [(e.src_id, e.src_port, e.dst_id, e.dst_port)
                       for e in n.meta.get("collapsed_edges", []) if e.label is None]
         assert sorted(found) == original
+
+
+# ---------- absorbing generated-name nodes (KV-cache plumbing) ----------
+
+def kv_graph() -> Graph:
+    """ReadValue_1 -> Gather_2 -> layers.0 node -> Assign_3, plus a named embedding that feeds only layers.0."""
+    g = Graph()
+    g.add_node(Node(0, "__module.model.embed_tokens/Gather", "Gather"))  # named, but not in a layer
+    g.add_node(Node(1, "ReadValue_1", "ReadValue"))
+    g.add_node(Node(2, "Gather_2", "Gather"))
+    g.add_node(Node(3, "__module.model.layers.0.attn/MatMul", "MatMul"))
+    g.add_node(Node(4, "Assign_3", "Assign"))
+    for e in [Edge(1, 0, 2, 0), Edge(2, 0, 3, 0), Edge(0, 0, 3, 1), Edge(3, 0, 4, 0)]:
+        g.add_edge(e)
+    return g
+
+
+def test_generated_name_chain_joins_its_layer():
+    out = Pipeline([CollapseModulesPass()]).run(kv_graph())
+    group = next(n for n in out.nodes.values() if n.op_type == "Group")
+    assert sorted(m["id"] for m in group.meta["members"]) == [1, 2, 3, 4]  # feeder chain, layer node, sink
+    assert [n.name for n in out.nodes.values() if n.op_type != "Group"] == ["__module.model.embed_tokens/Gather"]
+
+
+def test_named_nodes_are_never_moved_by_absorb():
+    out = Pipeline([CollapseModulesPass()]).run(kv_graph())
+    group = next(n for n in out.nodes.values() if n.op_type == "Group")
+    assert 0 not in [m["id"] for m in group.meta["members"]]  # the embedding only feeds layers.0, but has a real name
+
+
+def test_shared_generated_node_stays_outside():
+    g = Graph()
+    g.add_node(Node(0, "Gather_9", "Gather"))
+    for i in range(2):
+        g.add_node(Node(1 + i, f"m.layers.{i}.x", "Add"))
+        g.add_edge(Edge(0, 0, 1 + i, 0))  # feeds two different layers
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    assert [n.name for n in out.nodes.values() if n.op_type != "Group"] == ["Gather_9"]
+
+
+def test_absorb_can_be_switched_off():
+    out = Pipeline([CollapseModulesPass(absorb=False)]).run(kv_graph())
+    assert sorted(n.name for n in out.nodes.values() if n.op_type != "Group") == [
+        "Assign_3", "Gather_2", "ReadValue_1", "__module.model.embed_tokens/Gather"]
+    assert CollapseModulesPass.from_options({"absorb": ["false"]}).absorb is False
+    try:
+        CollapseModulesPass.from_options({"absorb": ["maybe"]})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_expanded_layer_keeps_its_plumbing_as_separate_nodes():
+    out = Pipeline([CollapseModulesPass(expand=["layers.0"])]).run(kv_graph())
+    assert not [n for n in out.nodes.values() if n.op_type == "Group"] and len(out.nodes) == 5
+
+
+def test_absorb_loses_no_edges():
+    g = kv_graph()
+    original = sorted((e.src_id, e.dst_id) for e in g.edges)
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    found = [(e.src_id, e.dst_id) for e in out.edges if e.label is None]
+    for n in out.nodes.values():
+        found += [(e.src_id, e.dst_id) for e in n.meta.get("folded_edges", [])]
+    assert sorted(found) == original
