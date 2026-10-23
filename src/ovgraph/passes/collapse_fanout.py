@@ -40,9 +40,10 @@ class CollapseFanoutPass(Pass):
         if "threshold" not in options:
             return cls()
         try:
-            return cls(int(options["threshold"][-1]))
+            threshold = int(options["threshold"][-1])
         except ValueError:
             raise ValueError("collapse_fanout: threshold must be an integer") from None
+        return cls(threshold)  # its own error (threshold below 1) is not re-labelled
 
     def run(self, graph: Graph) -> Graph:
         """Remove every outgoing edge of each wide node and leave rows describing them."""
@@ -59,7 +60,9 @@ class CollapseFanoutPass(Pass):
             graph.nodes[e.src_id].meta.setdefault("collapsed_edges", []).append(e)
             per_port[(e.src_id, e.src_port)] += 1
             text = f"[{e.dst_port}]: from id {e.src_id}"
-            if e.dtype is not None or e.shape is not None:  # merged group edges carry no tensor info
+            if e.label is not None:  # an edge merged by collapse_modules: say what it stands for
+                text += f": {e.label}"
+            elif e.dtype is not None or e.shape is not None:
                 text += f": {e.dtype or '?'}{format_shape(e.shape)}"
             graph.nodes[e.dst_id].meta.setdefault("extra_rows", []).append((e.dst_port, text))
             touched.update((e.src_id, e.dst_id))

@@ -24,8 +24,9 @@ class CollapseModulesPass(Pass):
       labelled with how many edges it stands for ("17 edges").
     - `expand` lists modules to leave unfolded, to look inside one layer:
           collapse_modules:expand=layers.0
-    - The folded nodes (id, name, op type, attributes, constant rows) are kept in node.meta["members"]
-      so the node map JSON still lists them. Run collapse_fanout AFTER this pass.
+    - The folded nodes (id, name, op type, attributes, constant rows) are kept in node.meta["members"],
+      and every edge that is no longer drawn as itself in node.meta["folded_edges"], so the node map JSON
+      still lists them. Run collapse_fanout AFTER this pass (the other order also works, but the rows are clearer).
     """
     name = "collapse_modules"
 
@@ -69,7 +70,9 @@ class CollapseModulesPass(Pass):
             group = Node(next_id, module, GROUP, {}, {
                 "members": [{"id": n.id, "name": n.name, "op_type": n.op_type, "attributes": n.attributes,
                              "rows": [text for _port, text in n.meta.get("extra_rows", [])]} for n in nodes],
-                "extra_rows": [(0, f"{len(nodes)} nodes")],
+                "extra_rows": [(0, f"{len(nodes)} node{'s' if len(nodes) > 1 else ''}")],
+                # edges collapse_fanout already removed from the members (if it ran first) stay recoverable
+                "collapsed_edges": [e for n in nodes for e in n.meta.get("collapsed_edges", [])],
             })
             graph.add_node(group)
             for n in nodes:
@@ -83,7 +86,12 @@ class CollapseModulesPass(Pass):
             dst = group_of.get(e.dst_id, e.dst_id)
             if src == e.src_id and dst == e.dst_id:
                 kept.append(e)  # neither end was folded: draw as before
-            elif src != dst:
+                continue
+            # Every edge that is not drawn as itself is recorded on a group (the source's, else the
+            # destination's), so the node map keeps the real node ids, ports and tensor info.
+            owner = graph.nodes[src] if e.src_id in group_of else graph.nodes[dst]
+            owner.meta.setdefault("folded_edges", []).append(e)
+            if src != dst:
                 merged[(src, dst)] += 1
             # else: both ends are inside the same module; the edge is hidden
         for (src, dst), count in merged.items():

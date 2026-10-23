@@ -123,6 +123,13 @@ def test_modules_become_one_box_each():
     assert [n.meta["extra_rows"] for n in groups] == [[(0, "2 nodes")]] * 2
 
 
+def test_single_node_group_is_not_plural():
+    g = Graph()
+    g.add_node(Node(0, "m.layers.0.x", "Add"))
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    assert out.nodes[1].meta["extra_rows"] == [(0, "1 node")]
+
+
 def test_module_edges_inside_vanish_and_between_merge_with_count():
     out = Pipeline([CollapseModulesPass()]).run(layered_graph())
     by_name = {n.name: n.id for n in out.nodes.values()}
@@ -192,3 +199,49 @@ def test_cli_flags_build_passes_in_order():
                                       "--hide-names", "--node-map", "out.json"])
     assert [p.name for p in build_pipeline(args).passes] == ["hide_constants", "collapse_modules", "collapse_fanout"]
     assert args.hide_names and args.node_map == "out.json"
+
+
+# ---------- review fixes ----------
+
+def test_folded_edges_are_recoverable_from_the_node_map():
+    out = Pipeline([CollapseModulesPass()]).run(layered_graph())
+    m = node_map(out)
+    by_name = {n.name: str(n.id) for n in out.nodes.values()}
+    edges = {(e["src_id"], e["dst_id"]) for e in m[by_name["layers.0"]]["folded_edges"]}
+    assert edges == {(0, 1), (1, 2), (2, 3)}  # into the box, inside it, and out of it
+
+
+def test_fanout_before_modules_keeps_collapsed_edges():
+    out = Pipeline([CollapseFanoutPass(threshold=2), CollapseModulesPass()]).run(fan_graph_in_layers())
+    group = next(n for n in out.nodes.values() if n.op_type == "Group")
+    assert node_map(out)[str(group.id)]["collapsed_outputs"] != []
+
+
+def fan_graph_in_layers() -> Graph:
+    g = Graph()
+    g.add_node(Node(0, "m.layers.0.src", "Add"))
+    for i in range(4):
+        g.add_node(Node(1 + i, f"m.layers.1.c{i}", "Add"))
+        g.add_edge(Edge(0, 0, 1 + i, 0, (1,), "f32"))
+    return g
+
+
+def test_fanout_after_modules_names_the_merged_edge_count():
+    g = Graph()
+    g.add_node(Node(0, "m.layers.0.src", "Add"))
+    for i in range(1, 6):
+        g.add_node(Node(i, f"m.layers.{i}.c", "Add"))
+        g.add_edge(Edge(0, 0, i, 0, (1,), "f32"))
+        g.add_edge(Edge(0, 1, i, 1, (1,), "f32"))  # two edges per pair, merged into "2 edges"
+    out = Pipeline([CollapseModulesPass(), CollapseFanoutPass()]).run(g)
+    rows = [t for n in out.nodes.values() for _p, t in n.meta.get("extra_rows", [])]
+    assert any(t.endswith("from id 6: 2 edges") for t in rows)
+
+
+def test_threshold_zero_gets_its_own_error_message():
+    try:
+        get_pass("collapse_fanout").from_options({"threshold": ["0"]})
+    except ValueError as e:
+        assert "at least 1" in str(e)
+    else:
+        raise AssertionError("expected ValueError")

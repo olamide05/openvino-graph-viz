@@ -18,7 +18,7 @@ Requirements: Python 3.10+, and the [Graphviz](https://graphviz.org/download/) `
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # cmd.exe: .venv\Scripts\activate.bat   Linux/macOS: source .venv/bin/activate
 pip install -e ".[openvino,dev]"
-python -m pytest -q                 # 41 tests
+python -m pytest -q                 # 65 tests
 ```
 
 Try it on the bundled example models:
@@ -160,7 +160,7 @@ On TinyLlama this takes the drawn graph from **1911 to 1528 nodes**. Small demo:
 | Option | What it does |
 |---|---|
 | `--hide-names` | Boxes show only `OpType (id N)`; median width drops from about 300 to about 100 pt. |
-| `--node-map map.json` | Writes node id -> name, op type, attributes, constant rows, collapsed edges and group members, so nothing hidden is lost. |
+| `--node-map map.json` | Writes node id -> name, op type, attributes, constant rows, collapsed edges and group members, so nothing hidden is lost (including the edges folded inside module boxes, under `folded_edges`). |
 | `--collapse-fanout` | A node with more than 3 outgoing edges (`--pass collapse_fanout:threshold=N` to change it) stops drawing them. The source gets `out[0] -> 44 consumers (collapsed)`, each consumer gets `[1]: from id 9: i64[1]`, and the edges are listed in the JSON. Run it **after** `--hide-constants`. |
 | `--collapse-modules` | One box per module, found from the node name (default pattern `layers\.\d+`). Edges inside a module vanish; edges between boxes merge into one labelled `N edges`. `--pass collapse_modules:expand=layers.0` leaves one layer unfolded to look inside it. Run `collapse_modules` **before** `collapse_fanout`. |
 
@@ -202,7 +202,7 @@ Regenerate the small SVGs with `python examples/generate_svgs.py`.
 ## 6. Testing
 
 ```powershell
-python -m pytest -q      # 41 tests, about 6 s
+python -m pytest -q      # 65 tests, about 6 s
 ```
 
 * Graph: node and edge creation, unique ids with duplicate names allowed, several edges between the same pair of nodes
