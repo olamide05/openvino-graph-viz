@@ -9,6 +9,7 @@ from ..graph import Edge, Graph, Node
 from .base import Pass, register_pass
 
 GROUP = "Group"
+SHARED = "shared (masks, positions)"
 # OpenVINO's generated names look like Gather_70871 (op type, underscore, number). Such a name says
 # nothing about which module the node belongs to, unlike __module.model.layers.7.self_attn/...
 AUTO_NAME = re.compile(r"^[A-Za-z0-9]+_\d+$")
@@ -28,6 +29,9 @@ class CollapseModulesPass(Pass):
       a node joins a module when ALL its consumers are in that module, else when ALL its producers are.
       This repeats until nothing changes, so a whole chain ReadValue -> Gather -> layer joins that layer.
       Nodes that DO have a module name (embeddings, final norm) are never moved this way.
+    - Generated-name nodes that are still loose after that (shared by several layers: attention mask and
+      position id plumbing) go into one box "shared (masks, positions)" (option `group_shared`, on by default;
+      it only applies together with `absorb`).
     - Edges inside a module disappear; edges between boxes are merged into one edge
       labelled with how many edges it stands for ("17 edges").
     - `expand` lists modules to leave unfolded, to look inside one layer:
@@ -39,8 +43,9 @@ class CollapseModulesPass(Pass):
     name = "collapse_modules"
 
     def __init__(self, pattern: str = r"(layers\.\d+)", expand: list[str] | set[str] | None = None,
-                 absorb: bool = True) -> None:
+                 absorb: bool = True, group_shared: bool = True) -> None:
         self.absorb = absorb
+        self.group_shared = group_shared
         self.regex = re.compile(pattern)
         if self.regex.groups < 1:
             raise ValueError("collapse_modules: pattern needs one capture group, e.g. (layers\\.\\d+)")
@@ -49,16 +54,21 @@ class CollapseModulesPass(Pass):
     @classmethod
     def from_options(cls, options: dict[str, list[str]]) -> "CollapseModulesPass":
         """Options: pattern=<regex with one group>  expand=layers.0,layers.1  absorb=true|false"""
-        unknown = set(options) - {"pattern", "expand", "absorb"}
+        unknown = set(options) - {"pattern", "expand", "absorb", "group_shared"}
         if unknown:
             raise ValueError(f"collapse_modules: unknown option(s) {', '.join(sorted(unknown))}; "
-                             "use pattern, expand, absorb")
+                             "use pattern, expand, absorb, group_shared")
         kwargs = {}
         if "absorb" in options:
             word = options["absorb"][-1].lower()
             if word not in ("true", "false"):
                 raise ValueError("collapse_modules: absorb must be true or false")
             kwargs["absorb"] = word == "true"
+        if "group_shared" in options:
+            word = options["group_shared"][-1].lower()
+            if word not in ("true", "false"):
+                raise ValueError("collapse_modules: group_shared must be true or false")
+            kwargs["group_shared"] = word == "true"
         if "pattern" in options:
             kwargs["pattern"] = ",".join(options["pattern"])  # a regex may contain commas, which the option parser split
         if "expand" in options:
@@ -102,6 +112,10 @@ class CollapseModulesPass(Pass):
                 module_of[n.id] = module
         if self.absorb:
             self._absorb(graph, module_of)
+            if self.group_shared:  # what is still loose is shared between layers (masks, position ids)
+                for i, n in graph.nodes.items():
+                    if i not in module_of and AUTO_NAME.match(n.name):
+                        module_of[i] = SHARED
 
         members: dict[str, list[Node]] = {}  # module -> its nodes, in order of first appearance
         for n in graph.nodes.values():

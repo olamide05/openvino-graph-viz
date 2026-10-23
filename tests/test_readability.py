@@ -235,7 +235,7 @@ def test_fanout_after_modules_names_the_merged_edge_count():
         g.add_edge(Edge(0, 1, i, 1, (1,), "f32"))  # two edges per pair, merged into "2 edges"
     out = Pipeline([CollapseModulesPass(), CollapseFanoutPass()]).run(g)
     rows = [t for n in out.nodes.values() for _p, t in n.meta.get("extra_rows", [])]
-    assert any(t.endswith("from id 6: 2 edges") for t in rows)
+    assert any(t == "shared inputs: id 6" for t in rows)  # the boxes get one short row; details stay in the JSON
 
 
 def test_threshold_zero_gets_its_own_error_message():
@@ -298,13 +298,25 @@ def test_named_nodes_are_never_moved_by_absorb():
     assert 0 not in [m["id"] for m in group.meta["members"]]  # the embedding only feeds layers.0, but has a real name
 
 
-def test_shared_generated_node_stays_outside():
+def test_shared_generated_node_goes_into_the_shared_box():
     g = Graph()
     g.add_node(Node(0, "Gather_9", "Gather"))
     for i in range(2):
         g.add_node(Node(1 + i, f"m.layers.{i}.x", "Add"))
         g.add_edge(Edge(0, 0, 1 + i, 0))  # feeds two different layers
     out = Pipeline([CollapseModulesPass()]).run(g)
+    assert all(n.op_type == "Group" for n in out.nodes.values())
+    shared = next(n for n in out.nodes.values() if n.name.startswith("shared"))
+    assert [m["name"] for m in shared.meta["members"]] == ["Gather_9"]
+
+
+def test_shared_generated_node_stays_outside_when_grouping_is_off():
+    g = Graph()
+    g.add_node(Node(0, "Gather_9", "Gather"))
+    for i in range(2):
+        g.add_node(Node(1 + i, f"m.layers.{i}.x", "Add"))
+        g.add_edge(Edge(0, 0, 1 + i, 0))
+    out = Pipeline([CollapseModulesPass(group_shared=False)]).run(g)
     assert [n.name for n in out.nodes.values() if n.op_type != "Group"] == ["Gather_9"]
 
 

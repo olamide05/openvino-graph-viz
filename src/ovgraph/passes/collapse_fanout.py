@@ -53,6 +53,7 @@ class CollapseFanoutPass(Pass):
         kept = []
         per_port: Counter = Counter()  # (source id, source port) -> how many edges collapsed
         touched: set[int] = set()
+        shared_into: dict[int, set[int]] = {}  # group box id -> ids of the wide nodes feeding it
         for e in graph.edges:
             if e.src_id not in wide:
                 kept.append(e)
@@ -64,12 +65,19 @@ class CollapseFanoutPass(Pass):
                 text += f": {e.label}"
             elif e.dtype is not None or e.shape is not None:
                 text += f": {e.dtype or '?'}{format_shape(e.shape)}"
-            graph.nodes[e.dst_id].meta.setdefault("extra_rows", []).append((e.dst_port, text))
+            if graph.nodes[e.dst_id].op_type == "Group":  # a box has no real ports: one short row per box, below
+                shared_into.setdefault(e.dst_id, set()).add(e.src_id)
+            else:
+                graph.nodes[e.dst_id].meta.setdefault("extra_rows", []).append((e.dst_port, text))
             touched.update((e.src_id, e.dst_id))
 
         for (src_id, port), n in sorted(per_port.items()):
             graph.nodes[src_id].meta.setdefault("extra_rows", []).append(
                 (port, f"out[{port}] -> {n} consumer{'s' if n > 1 else ''} (collapsed)"))
+
+        for box, sources in shared_into.items():
+            graph.nodes[box].meta.setdefault("extra_rows", []).append(
+                (0, "shared inputs: id " + ", ".join(str(i) for i in sorted(sources))))
 
         for i in touched:  # keep rows in port order, like hide_constants
             graph.nodes[i].meta["extra_rows"].sort(key=lambda r: r[0])

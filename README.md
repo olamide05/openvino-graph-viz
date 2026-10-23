@@ -18,7 +18,7 @@ Requirements: Python 3.10+, and the [Graphviz](https://graphviz.org/download/) `
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # cmd.exe: .venv\Scripts\activate.bat   Linux/macOS: source .venv/bin/activate
 pip install -e ".[openvino,dev]"
-python -m pytest -q                 # 72 tests
+python -m pytest -q                 # 73 tests
 ```
 
 Try it on the bundled example models:
@@ -162,7 +162,7 @@ On TinyLlama this takes the drawn graph from **1911 to 1528 nodes**. Small demo:
 | `--hide-names` | Boxes show only `OpType (id N)`; median width drops from about 300 to about 100 pt. |
 | `--node-map map.json` | Writes node id -> name, op type, attributes, constant rows, collapsed edges and group members, so nothing hidden is lost (including the edges folded inside module boxes, under `folded_edges`). |
 | `--collapse-fanout` | A node with more than 3 outgoing edges (`--pass collapse_fanout:threshold=N` to change it) stops drawing them. The source gets `out[0] -> 44 consumers (collapsed)`, each consumer gets `[1]: from id 9: i64[1]`, and the edges are listed in the JSON. Run it **after** `--hide-constants`. |
-| `--collapse-modules` | One box per module, found from the node name (default pattern `layers\.\d+`). Edges inside a module vanish; edges between boxes merge into one labelled `N edges`. `--pass collapse_modules:expand=layers.0` leaves one layer unfolded to look inside it. Nodes with generated names (`Gather_70871`, the KV-cache plumbing) are pulled into the box of the layer they only talk to; `absorb=false` turns this off. Run `collapse_modules` **before** `collapse_fanout`. |
+| `--collapse-modules` | One box per module, found from the node name (default pattern `layers\.\d+`). Edges inside a module vanish; edges between boxes merge into one labelled `N edges`. `--pass collapse_modules:expand=layers.0` leaves one layer unfolded to look inside it. Nodes with generated names (`Gather_70871`, the KV-cache plumbing) are pulled into the box of the layer they only talk to; `absorb=false` turns this off. Generated nodes still loose after that (shared by several layers: mask and position ids) go into one `shared (masks, positions)` box (`group_shared=false` turns this off). Several module kinds can share one pattern, e.g. `--pass "collapse_modules:pattern=(layers\.\d+|rotary_emb|embed_tokens|model/aten)"` also boxes the embedding, the rotary embedding and the mask building: TinyLlama then draws as 39 boxes. Run `collapse_modules` **before** `collapse_fanout`. |
 
 ```powershell
 # readable overview: one box per layer, shared inputs collapsed, short boxes
@@ -182,7 +182,8 @@ python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_layer0.svg --
 | + `--collapse-fanout` | 1528 / 1779 | 1.7 s | 4880 x 96957 |
 | + `--hide-names` | 1528 / 1779 | 1.9 s | 2219 x 89001 |
 | + `--collapse-modules` (overview, before absorb) | 314 / 321 | 0.2 s | 5489 x 3564 |
-| + `--collapse-modules` with absorb (overview) | 90 / 98 | 0.1 s | 1476 x 4595 |
+| + `--collapse-modules` with absorb (overview) | 81 / 87 | 0.05 s | - |
+| same, with the wider pattern above | 39 / 37 | 0.03 s | 1600 px wide render, 7644 tall |
 | overview with `expand=layers.0` | 373 / 389 | 0.2 s | 5917 x 7440 |
 
 Nothing is lost: in every setup all 2025 original edges and all 1528 nodes can be recovered from the picture plus the node map JSON (checked on this graph).
@@ -207,7 +208,7 @@ Regenerate the small SVGs with `python examples/generate_svgs.py`.
 ## 6. Testing
 
 ```powershell
-python -m pytest -q      # 72 tests, about 6 s
+python -m pytest -q      # 73 tests, about 6 s
 ```
 
 * Graph: node and edge creation, unique ids with duplicate names allowed, several edges between the same pair of nodes
