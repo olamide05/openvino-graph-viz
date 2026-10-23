@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 
 from ..graph import Graph, format_shape
-from .base import Pass, register_pass
+from .base import Pass, last_value, register_pass
 
 
 @register_pass
@@ -39,8 +39,9 @@ class CollapseFanoutPass(Pass):
             raise ValueError(f"collapse_fanout: unknown option(s) {', '.join(sorted(unknown))}; use threshold")
         if "threshold" not in options:
             return cls()
+        text = last_value("collapse_fanout", options, "threshold")
         try:
-            threshold = int(options["threshold"][-1])
+            threshold = int(text)
         except ValueError:
             raise ValueError("collapse_fanout: threshold must be an integer") from None
         return cls(threshold)  # its own error (threshold below 1) is not re-labelled

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ..graph import Graph, Node
-from .base import Pass, register_pass
+from .base import Pass, last_value, register_pass
 
 
 @register_pass
@@ -44,7 +44,7 @@ class HighlightPass(Pass):
             ids = {int(i) for i in options.get("ids", [])}
         except ValueError:
             raise ValueError("highlight: ids must be integers") from None
-        color = options.get("color", ["red"])[-1]
+        color = last_value("highlight", options, "color") if "color" in options else "red"
         return cls(names=set(options.get("names", [])), node_ids=ids,
                    op_types=set(options.get("ops", [])), color=color)
 

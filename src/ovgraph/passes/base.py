@@ -26,6 +26,18 @@ class Pass(ABC):
         return cls()
 
 
+def last_value(pass_name: str, options: dict[str, list[str]], key: str) -> str:
+    """The value of a single-value option; the last one wins if it was given twice.
+
+    `threshold=` (nothing after '=') reaches us as an empty list, so say that clearly
+    instead of failing with an IndexError.
+    """
+    values = options[key]
+    if not values:
+        raise ValueError(f"{pass_name}: option {key} needs a value, e.g. {key}=...")
+    return values[-1]
+
+
 class Pipeline:
     """Runs passes in order, always on a clone of the input graph."""
 

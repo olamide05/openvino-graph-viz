@@ -48,12 +48,14 @@ def _cells(prefix: str, ports: list[int], total: int) -> str:
 def node_label(node: Node, in_ports: list[int], out_ports: list[int],
                show_attributes: bool = False, show_names: bool = True) -> str:
     # show_names=False leaves the (long) node name out; the box shows "OpType (id N)" and the
-    # name can be looked up by id in the node map JSON.
+    # name can be looked up by id in the node map JSON. A Group box (from collapse_modules) always
+    # shows its name: that is the module name ("layers.7"), not a node name, and the box means
+    # nothing without it.
     total = max(len(in_ports), len(out_ports), 1)
     rows = []
     if in_ports:
         rows.append(_cells("in", in_ports, total))
-    if show_names:
+    if show_names or node.op_type == "Group":
         title = f"<B>{escape(node.name)}</B><BR/>{escape(node.op_type)} (id {node.id})"
     else:
         title = f"<B>{escape(node.op_type)}</B> (id {node.id})"

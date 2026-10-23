@@ -117,10 +117,11 @@ def environment_summary() -> str:
 
 
 def run(args: argparse.Namespace) -> dict[str, float]:
+    pipeline = build_pipeline(args)  # first, so a bad pass option is reported before the (slow) model load
     t0 = time.perf_counter()
     graph = load_graph(args.model, args.format)
     t1 = time.perf_counter()
-    out = build_pipeline(args).run(graph)
+    out = pipeline.run(graph)
     t2 = time.perf_counter()
     path = Path(args.output) if args.output else Path(args.model).with_suffix(".svg")
     if args.node_map:

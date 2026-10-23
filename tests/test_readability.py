@@ -130,15 +130,54 @@ def test_single_node_group_is_not_plural():
     assert out.nodes[1].meta["extra_rows"] == [(0, "1 node")]
 
 
-def test_module_edges_inside_vanish_and_between_merge_with_count():
+def test_module_edges_inside_vanish_and_single_edges_between_stay_plain():
     out = Pipeline([CollapseModulesPass()]).run(layered_graph())
     by_name = {n.name: n.id for n in out.nodes.values()}
-    pairs = {(e.src_id, e.dst_id): e.label for e in out.edges}
-    assert pairs[(by_name["input"], by_name["layers.0"])] == "1 edge"
-    assert pairs[(by_name["layers.0"], by_name["layers.1"])] == "1 edge"
-    assert pairs[(by_name["input"], by_name["layers.1"])] == "1 edge"
-    assert pairs[(by_name["layers.1"], by_name["output"])] == "1 edge"
+    pairs = {(e.src_id, e.dst_id): e for e in out.edges}
+    for a, b in [("input", "layers.0"), ("layers.0", "layers.1"), ("input", "layers.1"), ("layers.1", "output")]:
+        assert pairs[(by_name[a], by_name[b])].label is None  # one edge each: drawn as itself, no "1 edge"
     assert len(out.edges) == 4  # the two edges inside a layer are gone
+
+
+def recovered_edges(out: Graph) -> list[tuple]:
+    """Drawn edges between real nodes + folded edges + collapsed edges, as (src, src port, dst, dst port).
+
+    Drawn edges touching a box are skipped: the real edges behind them are in the box's folded_edges.
+    """
+    groups = {i for i, n in out.nodes.items() if n.op_type == "Group"}
+    found = []
+    for e in out.edges:
+        if e.src_id not in groups and e.dst_id not in groups:
+            found.append(e)
+    for n in out.nodes.values():
+        found += n.meta.get("folded_edges", [])
+        found += [e for e in n.meta.get("collapsed_edges", []) if e.src_id not in groups and e.dst_id not in groups]
+    return sorted((e.src_id, e.src_port, e.dst_id, e.dst_port) for e in found)
+
+
+def test_single_merged_edge_keeps_dtype_shape_and_real_port():
+    g = Graph()
+    g.add_node(Node(0, "input", "Parameter"))
+    g.add_node(Node(1, "m.layers.0.a", "Split"))
+    g.add_node(Node(2, "output", "Result"))
+    g.add_edge(Edge(0, 0, 1, 0, (1, 8), "f32"))
+    g.add_edge(Edge(1, 1, 2, 0, (1, 4), "f16"))  # out of the box from the member's port 1
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    box = next(i for i, n in out.nodes.items() if n.op_type == "Group")
+    assert Edge(0, 0, box, 0, (1, 8), "f32") in out.edges
+    assert Edge(box, 0, 2, 0, (1, 4), "f16") in out.edges  # the box side uses port 0, the Result keeps its port
+    assert "f16[1,4]" in GraphvizRenderer().to_dot(out)
+
+
+def test_real_node_port_is_kept_on_a_merged_edge():
+    g = Graph()
+    g.add_node(Node(0, "split", "Split"))
+    g.add_node(Node(1, "m.layers.0.a", "Add"))
+    g.add_node(Node(2, "m.layers.0.b", "Add"))
+    g.add_edge(Edge(0, 1, 1, 0))  # both from port 1 of a real node
+    g.add_edge(Edge(0, 1, 2, 0))
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    assert [(e.src_id, e.src_port, e.label) for e in out.edges] == [(0, 1, "2 edges")]
 
 
 def test_many_edges_between_modules_merge_into_one_labelled_edge():
@@ -188,8 +227,10 @@ def test_modules_then_fanout_together():
 
 def test_edge_label_override_is_drawn():
     g = layered_graph()
+    g.add_edge(Edge(1, 1, 3, 2))  # a second layers.0 -> layers.1 edge
     out = Pipeline([CollapseModulesPass()]).run(g)
-    assert "1 edge" in GraphvizRenderer().to_dot(out)
+    assert "2 edges" in GraphvizRenderer().to_dot(out)
+    assert "2 edges" not in GraphvizRenderer(edge_labels=False).to_dot(out)
 
 
 # ---------- CLI ----------
@@ -262,12 +303,7 @@ def test_every_original_edge_is_recoverable_after_both_passes():
     original = sorted((e.src_id, e.src_port, e.dst_id, e.dst_port) for e in g.edges)
     for passes in ([CollapseModulesPass(), CollapseFanoutPass(2)], [CollapseFanoutPass(2), CollapseModulesPass()]):
         out = Pipeline(passes).run(g)
-        found = [(e.src_id, e.src_port, e.dst_id, e.dst_port) for e in out.edges if e.label is None]
-        for n in out.nodes.values():
-            found += [(e.src_id, e.src_port, e.dst_id, e.dst_port) for e in n.meta.get("folded_edges", [])]
-            found += [(e.src_id, e.src_port, e.dst_id, e.dst_port)
-                      for e in n.meta.get("collapsed_edges", []) if e.label is None]
-        assert sorted(found) == original
+        assert recovered_edges(out) == original
 
 
 # ---------- absorbing generated-name nodes (KV-cache plumbing) ----------
@@ -340,9 +376,81 @@ def test_expanded_layer_keeps_its_plumbing_as_separate_nodes():
 
 def test_absorb_loses_no_edges():
     g = kv_graph()
-    original = sorted((e.src_id, e.dst_id) for e in g.edges)
+    original = sorted((e.src_id, e.src_port, e.dst_id, e.dst_port) for e in g.edges)
     out = Pipeline([CollapseModulesPass()]).run(g)
-    found = [(e.src_id, e.dst_id) for e in out.edges if e.label is None]
-    for n in out.nodes.values():
-        found += [(e.src_id, e.dst_id) for e in n.meta.get("folded_edges", [])]
-    assert sorted(found) == original
+    assert recovered_edges(out) == original
+
+
+# ---------- second review ----------
+
+def test_parameter_and_result_never_go_into_a_box_by_absorb_or_shared():
+    g = Graph()
+    g.add_node(Node(0, "Parameter_1", "Parameter"))  # generated names, but the model's input and output
+    g.add_node(Node(1, "m.layers.0.a", "Add"))
+    g.add_node(Node(2, "m.layers.1.b", "Add"))
+    g.add_node(Node(3, "Result_2", "Result"))
+    g.add_node(Node(4, "Result_3", "Result"))
+    for e in [Edge(0, 0, 1, 0), Edge(0, 0, 2, 0), Edge(1, 0, 3, 0), Edge(2, 0, 4, 0)]:
+        g.add_edge(e)
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    assert sorted(n.name for n in out.nodes.values()) == ["Parameter_1", "Result_2", "Result_3", "layers.0", "layers.1"]
+
+
+def test_graph_without_module_names_is_unchanged():
+    g = Graph()  # only generated names: no layers.N anywhere
+    g.add_node(Node(0, "Parameter_1", "Parameter"))
+    g.add_node(Node(1, "MatMul_2", "MatMul"))
+    g.add_node(Node(2, "Relu_3", "Relu"))
+    g.add_node(Node(3, "Result_4", "Result"))
+    for e in [Edge(0, 0, 1, 0), Edge(1, 0, 2, 0), Edge(2, 0, 3, 0)]:
+        g.add_edge(e)
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    assert sorted(out.nodes) == [0, 1, 2, 3] and out.edges == g.edges
+
+
+def test_shared_box_is_only_built_when_a_module_exists():
+    g = Graph()
+    g.add_node(Node(0, "Gather_1", "Gather"))
+    g.add_node(Node(1, "Add_2", "Add"))
+    g.add_edge(Edge(0, 0, 1, 0))
+    out = Pipeline([CollapseModulesPass()]).run(g)
+    assert not any(n.op_type == "Group" for n in out.nodes.values())
+
+
+def test_empty_option_values_are_clean_errors():
+    from ovgraph.passes import HideConstantsPass, HighlightPass
+    cases = [(CollapseFanoutPass, "threshold"), (CollapseModulesPass, "absorb"), (CollapseModulesPass, "group_shared"),
+             (CollapseModulesPass, "pattern"), (HighlightPass, "color"), (HideConstantsPass, "type")]
+    for cls, key in cases:
+        try:
+            cls.from_options({key: []})  # what "key=" turns into
+        except ValueError as e:
+            assert f"{key} needs a value" in str(e)
+        else:
+            raise AssertionError(key)
+
+
+def test_empty_option_value_on_the_command_line_exits_with_1(capsys):
+    from ovgraph.cli import main
+    for spec in ("collapse_fanout:threshold=", "collapse_modules:absorb=", "collapse_modules:group_shared=",
+                 "collapse_modules:pattern=", "highlight:color=", "hide_constants:type="):
+        assert main(["no_such_model.xml", "--pass", spec]) == 1  # options are checked before the model is loaded
+        assert "needs a value" in capsys.readouterr().err
+
+
+def test_hide_names_still_shows_the_module_name_of_a_box():
+    out = Pipeline([CollapseModulesPass()]).run(layered_graph())
+    box = next(n for n in out.nodes.values() if n.name == "layers.1")
+    dot = GraphvizRenderer(show_names=False).to_dot(out)
+    assert f"<B>layers.1</B><BR/>Group (id {box.id})" in dot
+    assert "__module" not in dot and "<B>input</B>" not in dot  # real node names stay hidden
+    assert node_map(out)[str(box.id)]["name"] == "layers.1"
+
+
+def test_highlighted_member_colours_its_box():
+    from ovgraph.passes import HighlightPass
+    out = Pipeline([HighlightPass(op_types={"Add"}, color="blue"), CollapseModulesPass()]).run(layered_graph())
+    boxes = [n for n in out.nodes.values() if n.op_type == "Group"]
+    assert [b.meta.get("border_color") for b in boxes] == ["blue", "blue"]
+    plain = Pipeline([CollapseModulesPass()]).run(layered_graph())
+    assert all("border_color" not in n.meta for n in plain.nodes.values())
