@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .loaders import available_loaders, load_graph
 from .passes import Pipeline, available_passes, get_pass
+from .export import write_node_map
 from .render import GraphvizRenderer
 
 
@@ -64,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=available_loaders(), help="force a loader (default: by extension)")
     p.add_argument("--hide-constants", action=_step("hide_constants", flag=True), dest="steps", default=[],
                    help="hide Constant nodes, show them as rows")
+    p.add_argument("--collapse-fanout", action=_step("collapse_fanout", flag=True), dest="steps", default=[],
+                   help="stop drawing edges of nodes with more than 3 consumers (use --pass collapse_fanout:threshold=N "
+                        "for another limit); run after --hide-constants")
+    p.add_argument("--collapse-modules", action=_step("collapse_modules", flag=True), dest="steps", default=[],
+                   help="one box per transformer layer (name pattern layers.N); see --pass collapse_modules:expand=layers.0")
     p.add_argument("--highlight-name", action=_step("highlight", "names"), dest="steps", default=[],
                    metavar="NAME", help="red border on every node with this name (repeatable)")
     p.add_argument("--highlight-op", action=_step("highlight", "ops"), dest="steps", default=[],
@@ -74,6 +80,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run any registered pass: NAME or NAME:key=value;key=value "
                         f"(available: {', '.join(available_passes())}). Repeatable.")
     p.add_argument("--attrs", action="store_true", help="show node attributes")
+    p.add_argument("--hide-names", action="store_true",
+                   help="leave node names out of the picture (narrower boxes); pair with --node-map")
+    p.add_argument("--node-map", metavar="JSON",
+                   help="write a JSON file: node id -> name, op type, attributes, rows, collapsed edges")
     p.add_argument("--no-edge-labels", action="store_true", help="omit dtype/shape on edges (faster, smaller)")
     p.add_argument("--fast", action=argparse.BooleanOptionalAction, default=None,
                    help="fast layout (straight edges). Default: automatic for big graphs")
@@ -113,7 +123,10 @@ def run(args: argparse.Namespace) -> dict[str, float]:
     out = build_pipeline(args).run(graph)
     t2 = time.perf_counter()
     path = Path(args.output) if args.output else Path(args.model).with_suffix(".svg")
-    GraphvizRenderer(edge_labels=not args.no_edge_labels, show_attributes=args.attrs, fast=args.fast).render_svg(out, path)
+    if args.node_map:
+        write_node_map(out, args.node_map)
+    GraphvizRenderer(edge_labels=not args.no_edge_labels, show_attributes=args.attrs, fast=args.fast,
+                     show_names=not args.hide_names).render_svg(out, path)
     t3 = time.perf_counter()
     return {"nodes_in": len(graph), "edges_in": len(graph.edges),
             "nodes_out": len(out), "edges_out": len(out.edges),

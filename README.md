@@ -145,6 +145,48 @@ python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_after.svg  --
 On TinyLlama this takes the drawn graph from **1911 to 1528 nodes**. Small demo:
 `examples/svg/fp16_before.svg` vs `examples/svg/fp16_after.svg`.
 
+## 4b. Making big graphs readable
+
+**What made TinyLlama hard to read.** Measured on the post-pass graph (1528 nodes, 2025 edges, `tinyllama_after.svg`):
+
+* Seven nodes with more than three outgoing edges (shared inputs such as `beam_idx`, the position ids and the attention
+  mask, each feeding all 22 layers) are 12% of the edges but about **75% of the total edge length**. Their edges have a
+  median length of about 17,500 pt on a 98,558 pt tall page, so they cross the whole picture.
+* The page is about 98,000 pt tall because the 22 identical decoder layers form one long chain.
+* Nodes are wide (median about 300 pt) because the node name is long, e.g. `__module.model.layers.0.self_attn/aten::...`.
+
+**What was added** (each one is optional and they combine):
+
+| Option | What it does |
+|---|---|
+| `--hide-names` | Boxes show only `OpType (id N)`; median width drops from about 300 to about 100 pt. |
+| `--node-map map.json` | Writes node id -> name, op type, attributes, constant rows, collapsed edges and group members, so nothing hidden is lost. |
+| `--collapse-fanout` | A node with more than 3 outgoing edges (`--pass collapse_fanout:threshold=N` to change it) stops drawing them. The source gets `out[0] -> 44 consumers (collapsed)`, each consumer gets `[1]: from id 9: i64[1]`, and the edges are listed in the JSON. Run it **after** `--hide-constants`. |
+| `--collapse-modules` | One box per module, found from the node name (default pattern `layers\.\d+`). Edges inside a module vanish; edges between boxes merge into one labelled `N edges`. `--pass collapse_modules:expand=layers.0` leaves one layer unfolded to look inside it. Run `collapse_modules` **before** `collapse_fanout`. |
+
+```powershell
+# readable overview: one box per layer, shared inputs collapsed, short boxes
+python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_overview.svg --node-map tinyllama_overview.json `
+    --pass fold_constant_converts --hide-constants --collapse-modules --collapse-fanout --hide-names
+
+# the same, with layer 0 shown in full
+python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_layer0.svg --node-map tinyllama_layer0.json `
+    --pass fold_constant_converts --hide-constants --pass collapse_modules:expand=layers.0 --collapse-fanout --hide-names
+```
+
+**Effect** (measured on the post-pass TinyLlama graph; rebuilt from the SVG, so port numbers are approximate):
+
+| Setup | Drawn nodes / edges | SVG page size (pt) |
+|---|---|---|
+| after passes (before this work) | 1528 / 2025 | 5784 x 98558 |
+| + `--collapse-fanout` | 1528 / 1779 | 3268 x 96957 |
+| + `--hide-names` | 1528 / 1779 | 1696 x 89001 |
+| + `--collapse-modules` (overview) | 314 / 321 | 7025 x 3564 |
+
+Hiding names and fan-out edges make the picture narrower and remove the longest edges, but only grouping fixes the height.
+In the overview the 292 nodes outside any layer are mostly the KV-cache plumbing (`ReadValue`, `Gather`, `Concat`,
+`Broadcast`, `Assign`: about ten per layer), because their names do not contain `layers.N`. Folding those into their layer is the next step.
+
 ## 5. Examples
 
 Three models, with generated SVGs:
@@ -216,3 +258,5 @@ This is where the 5,000-node target is checked:
 * `fold_constant_converts` assumes the `Constant -> Convert` pattern; other quantisation patterns (e.g. decompression with Multiply/Subtract) are not folded.
 * Finding the in/out edges of one node scans the whole edge list (O(E)). Fine at this size; an adjacency index is the next step if profiling shows a need.
 * Very large SVGs (several MB for TinyLlama) are slow to open in some viewers; use a browser.
+* `collapse_modules` finds the module from the node name only. Nodes without the pattern in their name (such as the KV-cache nodes in TinyLlama) stay outside the boxes.
+* `collapse_fanout` counts all outgoing edges of a node; the removed edges exist only in the node map JSON, not in the picture.
