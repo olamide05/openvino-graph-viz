@@ -245,3 +245,26 @@ def test_threshold_zero_gets_its_own_error_message():
         assert "at least 1" in str(e)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_every_original_edge_is_recoverable_after_both_passes():
+    """Drawn edges + folded edges + collapsed edges must add up to exactly the original edges."""
+    g = Graph()
+    g.add_node(Node(0, "mask", "Parameter"))
+    for layer in range(4):
+        a, b = 1 + 2 * layer, 2 + 2 * layer
+        g.add_node(Node(a, f"m.layers.{layer}.attn", "MatMul"))
+        g.add_node(Node(b, f"m.layers.{layer}.mlp", "Add"))
+        g.add_edge(Edge(0, 0, a, 1, (1,), "f32"))  # shared input feeds every layer
+        g.add_edge(Edge(a, 0, b, 0, (1,), "f32"))  # edge inside a layer
+        if layer:
+            g.add_edge(Edge(b - 2, 0, a, 0, (1,), "f32"))  # previous layer -> this layer
+    original = sorted((e.src_id, e.src_port, e.dst_id, e.dst_port) for e in g.edges)
+    for passes in ([CollapseModulesPass(), CollapseFanoutPass(2)], [CollapseFanoutPass(2), CollapseModulesPass()]):
+        out = Pipeline(passes).run(g)
+        found = [(e.src_id, e.src_port, e.dst_id, e.dst_port) for e in out.edges if e.label is None]
+        for n in out.nodes.values():
+            found += [(e.src_id, e.src_port, e.dst_id, e.dst_port) for e in n.meta.get("folded_edges", [])]
+            found += [(e.src_id, e.src_port, e.dst_id, e.dst_port)
+                      for e in n.meta.get("collapsed_edges", []) if e.label is None]
+        assert sorted(found) == original

@@ -18,7 +18,7 @@ Requirements: Python 3.10+, and the [Graphviz](https://graphviz.org/download/) `
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # cmd.exe: .venv\Scripts\activate.bat   Linux/macOS: source .venv/bin/activate
 pip install -e ".[openvino,dev]"
-python -m pytest -q                 # 65 tests
+python -m pytest -q                 # 66 tests
 ```
 
 Try it on the bundled example models:
@@ -174,14 +174,18 @@ python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_layer0.svg --
     --pass fold_constant_converts --hide-constants --pass collapse_modules:expand=layers.0 --collapse-fanout --hide-names
 ```
 
-**Effect** (measured on the post-pass TinyLlama graph; rebuilt from the SVG, so port numbers are approximate):
+**Effect** (real TinyLlama graph, 2 logical CPUs, Graphviz 2.43; page sizes vary a little between Graphviz versions):
 
-| Setup | Drawn nodes / edges | SVG page size (pt) |
-|---|---|---|
-| after passes (before this work) | 1528 / 2025 | 5784 x 98558 |
-| + `--collapse-fanout` | 1528 / 1779 | 3268 x 96957 |
-| + `--hide-names` | 1528 / 1779 | 1696 x 89001 |
-| + `--collapse-modules` (overview) | 314 / 321 | 7025 x 3564 |
+| Setup | Drawn nodes / edges | Layout time | SVG page size (pt) |
+|---|---|---|---|
+| after passes (before this work) | 1528 / 2025 | 111 s | 6413 x 93025 |
+| + `--collapse-fanout` | 1528 / 1779 | 1.7 s | 4880 x 96957 |
+| + `--hide-names` | 1528 / 1779 | 1.9 s | 2219 x 89001 |
+| + `--collapse-modules` (overview) | 314 / 321 | 0.2 s | 5489 x 3564 |
+| overview with `expand=layers.0` | 373 / 389 | 0.2 s | 5917 x 7440 |
+
+Nothing is lost: in every setup all 2025 original edges and all 1528 nodes can be recovered from the picture plus the node map JSON (checked on this graph).
+Removing the 246 long fan-out edges also made `dot` about 60x faster, which fits the finding that they were what made the layout expensive.
 
 Hiding names and fan-out edges make the picture narrower and remove the longest edges, but only grouping fixes the height.
 In the overview the 292 nodes outside any layer are mostly the KV-cache plumbing (`ReadValue`, `Gather`, `Concat`,
@@ -202,7 +206,7 @@ Regenerate the small SVGs with `python examples/generate_svgs.py`.
 ## 6. Testing
 
 ```powershell
-python -m pytest -q      # 65 tests, about 6 s
+python -m pytest -q      # 66 tests, about 6 s
 ```
 
 * Graph: node and edge creation, unique ids with duplicate names allowed, several edges between the same pair of nodes
