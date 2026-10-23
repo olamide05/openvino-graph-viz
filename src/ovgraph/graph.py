@@ -44,6 +44,9 @@ class Edge:
     dst_port: int
     shape: Shape | None = None
     dtype: str | None = None
+    # Text to draw on the edge instead of "dtype[shape]". Passes that merge
+    # several edges into one use it (e.g. "12 edges").
+    label: str | None = None
 
 
 class Graph:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..graph import Graph, format_shape
-from .base import Pass, register_pass
+from .base import Pass, last_value, register_pass
 
 CONSTANT = "Constant"
 
@@ -30,7 +30,7 @@ class HideConstantsPass(Pass):
         unknown = set(options) - {"type"}
         if unknown:
             raise ValueError(f"hide_constants: unknown option(s) {', '.join(sorted(unknown))}; use type")
-        return cls(options["type"][-1]) if "type" in options else cls()
+        return cls(last_value("hide_constants", options, "type")) if "type" in options else cls()
 
     def run(self, graph: Graph) -> Graph:
         const_ids = {i for i, n in graph.nodes.items()

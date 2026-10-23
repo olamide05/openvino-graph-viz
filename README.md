@@ -8,6 +8,8 @@ optionally transforms it with configurable passes, and draws it as an SVG with G
 * Original model is never modified (every pass runs on a copy).
 * Built-in passes: **highlight** (red border) and **hide constants** (constants become rows on the node that uses them).
 * Extra example pass: **fold_constant_converts**, which cleans up FP16 exports such as TinyLlama.
+* Readability options for big graphs: **collapse_fanout**, **collapse_modules** (one box per layer), `--hide-names`
+  and `--node-map` (see section 4b).
 
 ## 1. Getting started
 
@@ -18,7 +20,7 @@ Requirements: Python 3.10+, and the [Graphviz](https://graphviz.org/download/) `
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # cmd.exe: .venv\Scripts\activate.bat   Linux/macOS: source .venv/bin/activate
 pip install -e ".[openvino,dev]"
-python -m pytest -q                 # 41 tests
+python -m pytest -q                 # 82 tests
 ```
 
 Try it on the bundled example models:
@@ -31,7 +33,10 @@ python -m ovgraph examples\models\mini_transformer.xml -o out.svg --hide-constan
 
 ```
 ovgraph MODEL.xml [-o OUT.svg] [pass flags in the order you want them applied] [--attrs]
-                  [--no-edge-labels] [--fast | --no-fast] [--timing]
+                  [--hide-names] [--node-map JSON] [--no-edge-labels] [--fast | --no-fast] [--timing]
+
+pass flags: --hide-constants  --collapse-modules  --collapse-fanout
+            --highlight-name NAME  --highlight-op OP  --highlight-id ID  --pass SPEC
 ```
 
 With no pass flags the model is drawn as it is (no transformations).
@@ -42,19 +47,29 @@ With no pass flags the model is drawn as it is (no transformations).
 | Flag | What it does |
 |---|---|
 | `--hide-constants` | Remove Constant nodes. Each consumer gets a row per constant input: `[1]: f32[768,768]`. If a constant feeds several consumers the row ends with `(shared: <node id>)`. Only dtype and shape are shown, never values. |
+| `--collapse-modules` | One box per transformer layer (see section 4b). Run it before `--collapse-fanout`. |
+| `--collapse-fanout` | Stop drawing the edges of nodes with more than 3 consumers; they become rows (see section 4b). |
 | `--highlight-name NAME` | Red border on every node with this name (repeatable; names need not be unique, all matches light up). |
 | `--highlight-op OP` | Red border on every node of op type `OP` (repeatable, e.g. `MatMul`). |
 | `--highlight-id ID` | Red border on the node with this id (the number in each box, e.g. `MatMul (id 7)`). |
 | `--pass SPEC` | Run any registered pass: `NAME` or `NAME:key=value;key=value` (repeatable). Values can be comma lists. Example: `--pass "highlight:names=q,k;color=blue"`. Names may use `-` or `_`. |
 | `--attrs` | Show node attributes (hidden by default, they are long). |
-| `--no-edge-labels` | Leave dtype/shape off the edges (smaller and faster). |
+| `--hide-names` | Leave node names out of the boxes (`OpType (id N)` only). Module boxes still show their module name. |
+| `--node-map JSON` | Write node id -> name, op type, attributes, rows, collapsed and folded edges, box members. |
+| `--no-edge-labels` | Leave dtype/shape off the edges (smaller and faster). This also removes the `N edges` labels of merged edges. |
 | `--fast` / `--no-fast` | Force the fast layout on or off. Default: automatic above 400 drawn nodes. |
 | `--timing` | Print graph size (nodes and edges), load / transform / render time and the environment (stderr). |
 
 Pass options: `hide_constants` takes `type` (the op type to hide, default `Constant`);
-`highlight` takes `names`, `ids`, `ops`, `color`; `fold_constant_converts` takes none.
-Bad input (missing file, corrupt model, unknown pass or option, non-numeric id) gives a one-line
-`error: ...` and exit code 1; a malformed `--pass` spec is an argparse usage error (exit code 2).
+`highlight` takes `names`, `ids`, `ops`, `color`; `fold_constant_converts` takes none;
+`collapse_fanout` takes `threshold` (default 3); `collapse_modules` takes `pattern`, `expand`, `absorb`, `group_shared`.
+
+`pattern=` quirks, because `--pass` specs are split on `;` and `,`: a pattern cannot contain `;`; commas in it are
+split and then joined back with a comma (so `{1,2}` survives); several `pattern=` keys are joined with a comma too.
+
+Bad input (missing file, corrupt model, unknown pass or option, non-numeric id, an option with an empty value such as
+`collapse_fanout:threshold=`) gives a one-line `error: ...` and exit code 1. Pass options are checked before the model
+is loaded. A malformed `--pass` spec (no `=`) is an argparse usage error (exit code 2).
 
 Examples:
 
@@ -145,6 +160,69 @@ python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_after.svg  --
 On TinyLlama this takes the drawn graph from **1911 to 1528 nodes**. Small demo:
 `examples/svg/fp16_before.svg` vs `examples/svg/fp16_after.svg`.
 
+## 4b. Making big graphs readable
+
+**What made TinyLlama hard to read.** Measured on the post-pass graph (1528 nodes, 2025 edges, `tinyllama_after.svg`):
+
+* Seven nodes with more than three outgoing edges are 12% of the edges (246 of 2025) but about **75% of the total edge
+  length**. Six of them are shared inputs that feed the layers (`beam_idx`, the position ids and the attention mask
+  plumbing) with 44, 44, 44, 44, 44 and 22 consumers; the seventh (layer 0's `input_layernorm` Multiply) has 4.
+  Their edges have a median length of about 17,500 pt on a 98,558 pt tall page (`tinyllama_after.svg`, made on the
+  laptop in section 7 with Graphviz 16.1.0), so they cross the whole picture.
+* The page is about 98,000 pt tall because the 22 identical decoder layers form one long chain.
+* Nodes are wide (median about 300 pt) because the node name is long, e.g. `__module.model.layers.0.self_attn/aten::...`.
+
+**What was added** (each one is optional and they combine):
+
+| Option | What it does |
+|---|---|
+| `--hide-names` | Boxes show only `OpType (id N)`; median width drops from about 300 to about 100 pt. A module box from `--collapse-modules` still shows its module name (`layers.7`, `shared (masks, positions)`): that is not a node name. |
+| `--node-map map.json` | Writes node id -> name, op type, attributes, constant rows, collapsed edges and group members, so nothing hidden is lost (including the edges folded inside module boxes, under `folded_edges`). |
+| `--collapse-fanout` | A node with more than 3 outgoing edges (`--pass collapse_fanout:threshold=N` to change it) stops drawing them. The source gets `out[0] -> 44 consumers (collapsed)`, each consumer gets `[1]: from id 9: i64[1]`, and the edges are listed in the JSON. Run it **after** `--hide-constants`. |
+| `--collapse-modules` | One box per module, found from the node name (default pattern `layers\.\d+`). Edges inside a module vanish. Edges into or out of a box are merged per pair of ends into one edge labelled `N edges`; a box has one input and one output port (`0`), the end on a real node keeps its real port, and when only one edge is merged it is drawn as a normal edge with its dtype and shape. `--pass collapse_modules:expand=layers.0` leaves one layer unfolded to look inside it. Nodes with generated names (`Gather_70871`, the KV-cache plumbing) are pulled into the box of the layer they only talk to; `absorb=false` turns this off. Generated nodes still loose after that (shared by several layers: mask and position ids) go into one `shared (masks, positions)` box (`group_shared=false` turns this off). Parameter and Result nodes are never moved into a box this way (TinyLlama's logits output is called `Result_24245`), and if the pattern matches no node at all the graph is left unchanged. If `highlight` runs first, a box takes the border colour of its first highlighted member. Several module kinds can share one pattern, e.g. `--pass "collapse_modules:pattern=(layers\.\d+|rotary_emb|embed_tokens|model/aten)"` also boxes the embedding, the rotary embedding and the mask building: TinyLlama then draws as 40 nodes (26 boxes, plus the 4 inputs, the 7 final-norm nodes, `lm_head` and the logits output). Run `collapse_modules` **before** `collapse_fanout`: in the other order nothing is lost, but the boxes show no edges or rows for the wide nodes, and that connectivity is only in the JSON. |
+
+```powershell
+# readable overview: one box per layer, shared inputs collapsed, short boxes
+python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_overview.svg --node-map tinyllama_overview.json `
+    --pass fold_constant_converts --hide-constants --collapse-modules --collapse-fanout --hide-names
+
+# the same, with layer 0 shown in full
+python -m ovgraph models\tinyllama\openvino_model.xml -o tinyllama_layer0.svg --node-map tinyllama_layer0.json `
+    --pass fold_constant_converts --hide-constants --pass collapse_modules:expand=layers.0 --collapse-fanout --hide-names
+```
+
+**Effect.** All rows below come from the **xml-reader test harness** (it reads the TinyLlama IR `.xml` directly, with
+real ports, dtypes and shapes, and no OpenVINO), run in a **2-CPU Linux sandbox with Graphviz 2.43**, not on the laptop
+of section 7. Layout time is the Graphviz render only, median of 3 runs (the first row: one run). Page sizes differ a
+little between Graphviz versions: the laptop's `tinyllama_after.svg` (Graphviz 16.1.0) is 5784 x 98558 pt, the
+sandbox render of the same graph is 6413 x 93025 pt.
+
+| Setup | Drawn nodes / edges | Layout time | SVG page size (pt) |
+|---|---|---|---|
+| after passes (before this work), names shown | 1528 / 2025 | 113 s | 6413 x 93025 |
+| + `--collapse-fanout` | 1528 / 1779 | 1.6 s | 4880 x 96957 |
+| + `--hide-names` | 1528 / 1779 | 1.9 s | 2219 x 89001 |
+| + `--collapse-modules` with `absorb=false` | 314 / 321 | 0.10 s | 5640 x 3498 |
+| + `--collapse-modules` (overview, default) | 82 / 87 | 0.04 s | 1577 x 3639 |
+| same, with the wider pattern above | 40 / 37 | 0.03 s | 1109 x 3549 |
+| overview with `expand=layers.0` | 155 / 172 | 0.06 s | 1907 x 7084 |
+
+With the **real OpenVINO loader** (only run on the laptop) TinyLlama loads as 3168 nodes; the wide-pattern overview drew
+39 nodes and `expand=layers.0` drew 154. Those laptop runs were made before Parameter/Result nodes were kept out of the
+shared box: the one extra node in the harness rows is the logits output `Result_24245`, now drawn on its own.
+
+Nothing is lost: for the default overview, the wide pattern, `expand=layers.0` and the reversed pass order
+(`collapse_fanout` before `collapse_modules`), all 2025 edges and all 1528 nodes of the post-pass graph are recovered
+exactly from the drawn edges between real nodes plus `folded_edges`, `collapsed_outputs` and `members` in the node map
+JSON (checked with the harness).
+
+In the sandbox, removing the 246 long fan-out edges took the layout from 113 s to 1.6 s (about 70x), which fits the
+finding that they were what made the layout expensive. These are sandbox timings (2 CPUs, Graphviz 2.43); on the laptop
+(8 CPUs, Graphviz 16.1.0) the same graph without these options rendered in 8.9 s (section 7), and the new options were
+not timed there.
+
+Hiding names and fan-out edges make the picture narrower and remove the longest edges, but only grouping fixes the height.
+
 ## 5. Examples
 
 Three models, with generated SVGs:
@@ -160,7 +238,7 @@ Regenerate the small SVGs with `python examples/generate_svgs.py`.
 ## 6. Testing
 
 ```powershell
-python -m pytest -q      # 41 tests, about 6 s
+python -m pytest -q      # 82 tests, under 1 s in the 2-CPU Linux sandbox (Graphviz 2.43); not timed on the laptop
 ```
 
 * Graph: node and edge creation, unique ids with duplicate names allowed, several edges between the same pair of nodes
@@ -175,6 +253,12 @@ python -m pytest -q      # 41 tests, about 6 s
   run the real CLI with passes and check the SVG (needs `dot`; skipped without it). Pass order on the command line.
 * Error paths: missing file, corrupt model, unknown extension, unknown pass or option give a clean message and exit code 1.
 * The example models and the custom pass are covered too.
+* Readability passes (`tests/test_readability.py`): `--hide-names` and the node map; `collapse_fanout` rows, thresholds
+  and per-port counts; `collapse_modules` boxes, merged edges (`N edges`, a single edge drawn with its dtype/shape,
+  real-node ports kept), `expand`, absorbing generated-name nodes, the shared box, Parameter/Result never moved into a
+  box, a graph without `layers.N` names left unchanged, a highlighted member colouring its box, a module box keeping
+  its name under `--hide-names`; empty option values (`threshold=`, `absorb=`, `group_shared=`, `pattern=`, `color=`,
+  `type=`) give exit code 1; and every original edge recoverable from the picture plus the JSON in both pass orders.
 
 ## 7. Performance
 
@@ -216,3 +300,7 @@ This is where the 5,000-node target is checked:
 * `fold_constant_converts` assumes the `Constant -> Convert` pattern; other quantisation patterns (e.g. decompression with Multiply/Subtract) are not folded.
 * Finding the in/out edges of one node scans the whole edge list (O(E)). Fine at this size; an adjacency index is the next step if profiling shows a need.
 * Very large SVGs (several MB for TinyLlama) are slow to open in some viewers; use a browser.
+* `collapse_modules` finds the module from the node name only. Named nodes outside a layer (embeddings, final norm, mask building) stay outside the boxes unless the pattern includes them; generated-name nodes shared by several layers go into the one shared box.
+* A module box has a single input and output port, so a merged `N edges` edge does not say which member or port it reaches; the real ends are in the JSON (`folded_edges`).
+* In a model where a generated-name node both reads a layer's output and feeds the layers, the shared box makes a cycle between boxes (layer -> shared -> layer). TinyLlama has none; Graphviz draws cycles anyway.
+* `collapse_fanout` counts all outgoing edges of a node; the removed edges exist only in the node map JSON, not in the picture.

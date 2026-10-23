@@ -46,12 +46,19 @@ def _cells(prefix: str, ports: list[int], total: int) -> str:
 
 
 def node_label(node: Node, in_ports: list[int], out_ports: list[int],
-               show_attributes: bool = False) -> str:
+               show_attributes: bool = False, show_names: bool = True) -> str:
+    # show_names=False leaves the (long) node name out; the box shows "OpType (id N)" and the
+    # name can be looked up by id in the node map JSON. A Group box (from collapse_modules) always
+    # shows its name: that is the module name ("layers.7"), not a node name, and the box means
+    # nothing without it.
     total = max(len(in_ports), len(out_ports), 1)
     rows = []
     if in_ports:
         rows.append(_cells("in", in_ports, total))
-    title = f"<B>{escape(node.name)}</B><BR/>{escape(node.op_type)} (id {node.id})"
+    if show_names or node.op_type == "Group":
+        title = f"<B>{escape(node.name)}</B><BR/>{escape(node.op_type)} (id {node.id})"
+    else:
+        title = f"<B>{escape(node.op_type)}</B> (id {node.id})"
     rows.append(f'<TR><TD COLSPAN="{total}">{title}</TD></TR>')
     for k, v in (node.attributes.items() if show_attributes else ()):
         rows.append(f'<TR><TD COLSPAN="{total}" ALIGN="LEFT">{escape(k)}={escape(v)}</TD></TR>')
@@ -63,7 +70,8 @@ def node_label(node: Node, in_ports: list[int], out_ports: list[int],
 
 
 def build_digraph(graph: Graph, edge_labels: bool = True,
-                  show_attributes: bool = False, fast: bool | None = None) -> graphviz.Digraph:
+                  show_attributes: bool = False, fast: bool | None = None,
+                  show_names: bool = True) -> graphviz.Digraph:
     """fast=None means automatic: big graphs get the quick layout settings."""
     if fast is None:
         fast = len(graph) > FAST_NODE_THRESHOLD
@@ -83,29 +91,30 @@ def build_digraph(graph: Graph, edge_labels: bool = True,
     for n in graph.nodes.values():
         color = n.meta.get("border_color", "black")
         pen = "3" if "border_color" in n.meta else "1"
-        dot.node(str(n.id), label=node_label(n, sorted(ins[n.id]), sorted(outs[n.id]), show_attributes),
+        dot.node(str(n.id), label=node_label(n, sorted(ins[n.id]), sorted(outs[n.id]), show_attributes, show_names),
                  fillcolor=_fill(n.op_type), color=color, penwidth=pen)
 
     for e in graph.edges:
         kw = {}
         if edge_labels:
-            kw["label"] = f"{e.dtype or '?'}{format_shape(e.shape)}"
+            kw["label"] = e.label if e.label is not None else f"{e.dtype or '?'}{format_shape(e.shape)}"
         dot.edge(f"{e.src_id}:out{e.src_port}:s", f"{e.dst_id}:in{e.dst_port}:n", **kw)
     return dot
 
 
 class GraphvizRenderer:
     def __init__(self, edge_labels: bool = True, show_attributes: bool = False,
-                 fast: bool | None = None) -> None:
+                 fast: bool | None = None, show_names: bool = True) -> None:
         self.edge_labels = edge_labels
         self.show_attributes = show_attributes
         self.fast = fast
+        self.show_names = show_names
 
     def to_dot(self, graph: Graph) -> str:
-        return build_digraph(graph, self.edge_labels, self.show_attributes, self.fast).source
+        return build_digraph(graph, self.edge_labels, self.show_attributes, self.fast, self.show_names).source
 
     def render_svg(self, graph: Graph, path: str | Path | None = None) -> bytes:
-        svg = build_digraph(graph, self.edge_labels, self.show_attributes, self.fast).pipe(format="svg")
+        svg = build_digraph(graph, self.edge_labels, self.show_attributes, self.fast, self.show_names).pipe(format="svg")
         if path is not None:
             Path(path).write_bytes(svg)
         return svg
